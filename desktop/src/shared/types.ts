@@ -21,6 +21,7 @@ export interface SiteMeta {
   faviconUrl?: string;
   types: ContentType[];
   canDetect: boolean; // an account-info getter exists for this site
+  region: "International" | "CN";
 }
 
 export interface Group {
@@ -59,6 +60,7 @@ export interface Settings {
   closeWindowsOnSuccess: boolean;
   showPublishWindows: boolean;
   pageTimeoutSec: number;
+  maxOpenWindows: number; // publish windows kept open at once (finished ones included)
   language: "en" | "zh_CN";
   theme: "system" | "light" | "dark";
 }
@@ -97,7 +99,8 @@ export interface PublishRequest {
   autoPublish: boolean;
 }
 
-export type JobStatus = "queued" | "loading" | "injecting" | "done" | "failed" | "cancelled";
+// "attention": the page is filled but we could not confirm the result — the user should look at the window.
+export type JobStatus = "queued" | "loading" | "injecting" | "done" | "attention" | "failed" | "cancelled";
 
 export interface PublishJob {
   id: string;
@@ -112,6 +115,7 @@ export interface PublishJob {
   finishedAt?: number;
   url?: string;
   attempts: number;
+  autoPublish?: boolean;
 }
 
 export interface PublishRun {
@@ -128,6 +132,7 @@ export interface AppState {
   settings: Settings;
   runs: PublishRun[];
   jobs: PublishJob[];
+  pendingPartitionDeletes?: string[]; // folders of deleted accounts still locked by Chromium
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -136,6 +141,7 @@ export const DEFAULT_SETTINGS: Settings = {
   closeWindowsOnSuccess: false,
   showPublishWindows: true,
   pageTimeoutSec: 60,
+  maxOpenWindows: 8,
   language: "en",
   theme: "system",
 };

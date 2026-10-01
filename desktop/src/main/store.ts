@@ -15,12 +15,28 @@ function emptyState(): AppState {
 }
 
 let state: AppState = emptyState();
+// Never write before the file was read: a second app instance or an early quit would otherwise
+// overwrite the user's data with an empty state.
+let loaded = false;
 let saveTimer: NodeJS.Timeout | null = null;
 const listeners = new Set<(s: AppState) => void>();
 
+function readDataFile(): Partial<AppState> {
+  try {
+    return JSON.parse(fs.readFileSync(dataFile(), "utf8"));
+  } catch (error) {
+    // A torn or corrupt file: fall back to the last good copy.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && fs.existsSync(`${dataFile()}.bak`)) {
+      console.error("Data file unreadable, restoring backup", error);
+      return JSON.parse(fs.readFileSync(`${dataFile()}.bak`, "utf8"));
+    }
+    throw error;
+  }
+}
+
 export function loadState(): AppState {
   try {
-    const raw = JSON.parse(fs.readFileSync(dataFile(), "utf8")) as Partial<AppState>;
+    const raw = readDataFile();
     state = {
       ...emptyState(),
       ...raw,
@@ -43,6 +59,7 @@ export function loadState(): AppState {
     }
     state = emptyState();
   }
+  loaded = true;
   return state;
 }
 
@@ -50,12 +67,51 @@ export function getState(): AppState {
   return state;
 }
 
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function writeNow() {
+  if (!loaded) return;
   const file = dataFile();
   const tmp = `${file}.tmp`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, file); // atomic replace so a crash never leaves a half-written file
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeFileSync(fd, JSON.stringify(state, null, 2));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+  } catch {
+    // backup is best effort
+  }
+  // Atomic replace. On Windows antivirus/indexers briefly lock files (EPERM/EBUSY): retry.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(tmp, file);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 6 || !["EPERM", "EBUSY", "EACCES"].includes(code ?? "")) throw error;
+      sleepSync(50 * 2 ** attempt);
+    }
+  }
+}
+
+function scheduleSave(delay: number) {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      writeNow();
+    } catch (error) {
+      console.error("Failed to save data, retrying", error);
+      scheduleSave(2000);
+    }
+  }, delay);
 }
 
 export function flush() {
@@ -74,16 +130,7 @@ export function update(mutator: (s: AppState) => void) {
     state.jobs = state.jobs.filter((j) => !droppedJobs.has(j.id));
   }
   for (const l of listeners) l(state);
-  if (!saveTimer) {
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      try {
-        writeNow();
-      } catch (error) {
-        console.error("Failed to save data", error);
-      }
-    }, 250);
-  }
+  scheduleSave(250);
 }
 
 export function onChange(listener: (s: AppState) => void) {

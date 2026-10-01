@@ -33,6 +33,7 @@ const api = {
   cancelJob: (id: string) => invoke("job:cancel", id),
   showJob: (id: string) => invoke("job:show", id),
   retryableJobs: (ids: string[]) => invoke("job:canRetry", ids),
+  openJobWindows: () => invoke("job:openWindows"),
   clearHistory: () => invoke("history:clear"),
   updateSettings: (patch: unknown) => invoke("settings:update", patch),
   exportData: () => invoke("data:export"),

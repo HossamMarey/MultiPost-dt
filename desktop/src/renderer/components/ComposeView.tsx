@@ -1,4 +1,5 @@
 import {
+  Check,
   FileAudio,
   FileText,
   Film,
@@ -123,7 +124,7 @@ function Editor({ draft, patch }: { draft: Draft; patch: (p: Partial<Draft>) => 
   return (
     <>
       <input
-        className="w-full bg-transparent text-2xl font-semibold outline-none placeholder:text-muted/50"
+        className="w-full bg-transparent text-lg font-semibold outline-none placeholder:font-medium placeholder:text-muted/50"
         placeholder={type === "DYNAMIC" ? t("titleOptional") : t("title")}
         value={draft.title}
         onChange={(e) => patch({ title: e.target.value })}
@@ -145,7 +146,7 @@ function Editor({ draft, patch }: { draft: Draft; patch: (p: Partial<Draft>) => 
         />
       )}
       {type === "DYNAMIC" && (
-        <>
+        <div className="grid grid-cols-2 gap-4">
           <MediaGrid
             label={t("images")}
             files={draft.images}
@@ -162,7 +163,7 @@ function Editor({ draft, patch }: { draft: Draft; patch: (p: Partial<Draft>) => 
             addLabel={t("addVideo")}
             icon={<Film size={18} />}
           />
-        </>
+        </div>
       )}
       {type === "VIDEO" && (
         <div className="grid grid-cols-[1fr_220px] gap-4">
@@ -379,7 +380,7 @@ function MediaGrid({
       <div
         {...drop.props}
         className={cx(
-          "grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2 rounded-xl transition",
+          "grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2 rounded-xl transition",
           drop.over && "ring-2 ring-primary-500",
         )}>
         {files.map((f, i) => (
@@ -644,24 +645,29 @@ function TargetsPanel({
           {state.groups.map((g) => {
             const keys = keysForAccounts(g.accountIds);
             if (!keys.length) return null;
-            const on = keys.every((k) => selectedSet.has(k));
-            const some = !on && keys.some((k) => selectedSet.has(k));
+            const picked = keys.filter((k) => selectedSet.has(k)).length;
+            const on = picked === keys.length;
+            const some = !on && picked > 0;
             return (
               <button
                 key={g.id}
                 type="button"
+                aria-pressed={on ? "true" : some ? "mixed" : "false"}
+                title={some ? t("partialGroup", { n: picked, total: keys.length }) : undefined}
                 onClick={() => toggleKeys(keys, !on)}
                 className={cx(
                   "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition",
                   on
-                    ? "border-primary-500 bg-primary-50 text-primary-700 dark:text-primary-500"
+                    ? "border-primary-600 bg-primary-600 text-white"
                     : some
-                      ? "border-primary-500/50 border-dashed"
+                      ? "border-primary-500 bg-primary-50 text-primary-700 dark:text-primary-500"
                       : "border-border hover:bg-elevated",
                 )}>
-                <span className="h-2 w-2 rounded-full" style={{ background: g.color }} />
+                {on ? <Check size={12} /> : <span className="h-2 w-2 rounded-full" style={{ background: g.color }} />}
                 {g.name}
-                <span className="tabular-nums text-muted">{keys.length}</span>
+                <span className={cx("tabular-nums", on ? "text-white/80" : "text-muted")}>
+                  {some ? `${picked}/${keys.length}` : keys.length}
+                </span>
               </button>
             );
           })}
@@ -688,7 +694,7 @@ function TargetsPanel({
                 <li key={account.id}>
                   <label className="flex cursor-pointer items-center gap-3 px-4 py-2 hover:bg-elevated/60">
                     <Checkbox checked={on} indeterminate={some} onChange={(v) => toggleKeys(keys, v)} />
-                    <Favicon src={site?.faviconUrl} label={site?.label ?? ""} size={22} />
+                    <Favicon src={site?.faviconUrl} siteKey={site?.accountKey} label={site?.label ?? ""} size={22} />
                     <div className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate font-medium">{account.label}</span>
                       <span className="truncate text-[11px] text-muted">
@@ -697,7 +703,11 @@ function TargetsPanel({
                       </span>
                     </div>
                     {account.status === "logged-out" && (
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-warning" title={t("statusLoggedOut")} />
+                      <span
+                        className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning"
+                        title={t("notSignedInDot")}>
+                        {t("statusLoggedOut")}
+                      </span>
                     )}
                   </label>
                   {platforms.length > 1 && (

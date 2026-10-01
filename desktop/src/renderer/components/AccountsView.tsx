@@ -13,7 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Account, Group, SiteMeta } from "../../shared/types";
+import type { Account, ContentType, Group, SiteMeta } from "../../shared/types";
 import { GROUP_COLORS } from "../../shared/types";
 import { api, errorMessage } from "../api";
 import { useApp } from "../context";
@@ -28,10 +28,25 @@ export function AccountsView({ groupId }: { groupId?: string }) {
   const [editing, setEditing] = useState<Account | null>(null);
   const [members, setMembers] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"all" | "logged-in" | "attention">("all");
 
   const group = groupId ? state.groups.find((g) => g.id === groupId) : undefined;
+  const scoped = useMemo(
+    () => (group ? state.accounts.filter((a) => group.accountIds.includes(a.id)) : state.accounts),
+    [state.accounts, group],
+  );
+  const counts = useMemo(
+    () => ({
+      in: scoped.filter((a) => a.status === "logged-in").length,
+      out: scoped.filter((a) => a.status === "logged-out").length,
+      unknown: scoped.filter((a) => a.status === "unknown").length,
+    }),
+    [scoped],
+  );
   const accounts = useMemo(() => {
-    let list = group ? state.accounts.filter((a) => group.accountIds.includes(a.id)) : state.accounts;
+    let list = scoped;
+    if (statusFilter === "logged-in") list = list.filter((a) => a.status === "logged-in");
+    if (statusFilter === "attention") list = list.filter((a) => a.status !== "logged-in");
     const q = query.trim().toLowerCase();
     if (q) {
       list = list.filter((a) =>
@@ -45,7 +60,7 @@ export function AccountsView({ groupId }: { groupId?: string }) {
         (sitesByKey.get(a.accountKey)?.label ?? "").localeCompare(sitesByKey.get(b.accountKey)?.label ?? "") ||
         a.label.localeCompare(b.label),
     );
-  }, [state.accounts, group, query, sitesByKey]);
+  }, [scoped, statusFilter, query, sitesByKey]);
 
   const checkAll = async () => {
     setChecking(true);
@@ -58,41 +73,74 @@ export function AccountsView({ groupId }: { groupId?: string }) {
     }
   };
 
+  const filterOptions: { value: typeof statusFilter; label: string; count: number }[] = [
+    { value: "all", label: t("filterAll"), count: scoped.length },
+    { value: "logged-in", label: t("statusLoggedIn"), count: counts.in },
+    { value: "attention", label: t("filterNeedsSignIn"), count: counts.out + counts.unknown },
+  ];
+
   return (
     <div className="flex h-full flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface/60 px-6 py-4">
-        {group ? <GroupHeader group={group} /> : <h1 className="text-lg font-semibold">{t("allAccounts")}</h1>}
-        <span className="text-xs text-muted">{t("accountsCount", { n: accounts.length })}</span>
-        <div className="flex-1" />
-        <div className="relative">
-          <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
-          <input
-            className="field h-9 w-56 py-0 pl-8"
-            placeholder={t("search")}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+      <header className="flex flex-col gap-3 border-b border-border bg-surface/60 px-6 pb-3 pt-4">
+        <div className="flex items-center gap-3">
+          {group ? <GroupHeader group={group} /> : <h1 className="text-lg font-semibold">{t("allAccounts")}</h1>}
+          {scoped.length > 0 && (
+            <span className="text-xs text-muted">
+              {t("signedInSummary", { n: counts.in, total: scoped.length })}
+              {counts.out > 0 && <span className="text-warning"> · {t("notSignedInCount", { n: counts.out })}</span>}
+            </span>
+          )}
+          <div className="flex-1" />
+          {group && state.accounts.length > 0 && (
+            <Button onClick={() => setMembers(true)} icon={<Users size={15} />}>
+              {t("manageMembers")}
+            </Button>
+          )}
+          <Button variant="primary" onClick={() => setAdding(true)} icon={<Plus size={16} />}>
+            {t("addAccount")}
+          </Button>
         </div>
-        {state.accounts.length > 0 && (
-          <Button
-            onClick={checkAll}
-            disabled={checking}
-            icon={<RefreshCw size={15} className={checking ? "animate-spin-slow" : ""} />}>
-            {t("checkAll")}
-          </Button>
+        {scoped.length > 0 && (
+          <div className="flex items-center gap-3">
+            <div className="flex rounded-lg bg-elevated p-0.5">
+              {filterOptions.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => setStatusFilter(o.value)}
+                  className={cx(
+                    "flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium",
+                    statusFilter === o.value ? "bg-surface shadow-card" : "text-muted hover:text-foreground",
+                  )}>
+                  {o.label}
+                  <span className="tabular-nums text-muted">{o.count}</span>
+                </button>
+              ))}
+            </div>
+            <div className="relative">
+              <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+              <input
+                className="field h-8 w-56 py-0 pl-8"
+                placeholder={t("search")}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <div className="flex-1" />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={checkAll}
+              disabled={checking}
+              icon={<RefreshCw size={14} className={checking ? "animate-spin-slow" : ""} />}>
+              {t("checkAll")}
+            </Button>
+          </div>
         )}
-        {group && (
-          <Button onClick={() => setMembers(true)} icon={<Users size={15} />}>
-            {t("manageMembers")}
-          </Button>
-        )}
-        <Button variant="primary" onClick={() => setAdding(true)} icon={<Plus size={16} />}>
-          {t("addAccount")}
-        </Button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        {accounts.length === 0 && !query ? (
+        {scoped.length === 0 ? (
           group ? (
             <EmptyState
               icon={<Users size={22} />}
@@ -122,7 +170,13 @@ export function AccountsView({ groupId }: { groupId?: string }) {
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
             {accounts.map((a) => (
-              <AccountCard key={a.id} account={a} site={sitesByKey.get(a.accountKey)} onEdit={() => setEditing(a)} />
+              <AccountCard
+                key={a.id}
+                account={a}
+                site={sitesByKey.get(a.accountKey)}
+                currentGroupId={groupId}
+                onEdit={() => setEditing(a)}
+              />
             ))}
           </div>
         )}
@@ -254,13 +308,19 @@ function StatusBadge({ account, site }: { account: Account; site?: SiteMeta }) {
   );
 }
 
-function AccountCard({ account, site, onEdit }: { account: Account; site?: SiteMeta; onEdit: () => void }) {
+function AccountCard({
+  account,
+  site,
+  currentGroupId,
+  onEdit,
+}: { account: Account; site?: SiteMeta; currentGroupId?: string; onEdit: () => void }) {
   const { state } = useApp();
   const { toast, confirm } = useFeedback();
   const [checking, setChecking] = useState(false);
   const [menu, setMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const groups = state.groups.filter((g) => g.accountIds.includes(account.id));
+  // Inside a group page, that group's own chip is noise.
+  const groups = state.groups.filter((g) => g.accountIds.includes(account.id) && g.id !== currentGroupId);
 
   useEffect(() => {
     if (!menu) return;
@@ -303,6 +363,7 @@ function AccountCard({ account, site, onEdit }: { account: Account; site?: SiteM
           ) : (
             <Favicon
               src={site?.faviconUrl}
+              siteKey={site?.accountKey}
               label={site?.label ?? account.accountKey}
               size={40}
               className="rounded-full"
@@ -311,6 +372,7 @@ function AccountCard({ account, site, onEdit }: { account: Account; site?: SiteM
           {account.profile?.avatarUrl && (
             <Favicon
               src={site?.faviconUrl}
+              siteKey={site?.accountKey}
               label={site?.label ?? account.accountKey}
               size={18}
               className="absolute -bottom-1 -right-1 rounded-full ring-2 ring-surface"
@@ -354,7 +416,7 @@ function AccountCard({ account, site, onEdit }: { account: Account; site?: SiteM
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex min-h-[22px] flex-wrap items-center gap-1.5">
         <StatusBadge account={account} site={site} />
         {account.proxy && (
           <span
@@ -372,30 +434,23 @@ function AccountCard({ account, site, onEdit }: { account: Account; site?: SiteM
             {g.name}
           </span>
         ))}
-        {account.profile?.checkedAt && (
-          <span className="ml-auto text-[11px] text-muted">
-            {t("lastChecked", { time: timeAgo(account.profile.checkedAt) })}
-          </span>
-        )}
       </div>
 
-      <div className="flex gap-2">
+      <div className="mt-auto flex items-center gap-2 border-t border-border pt-3">
         <Button
           size="sm"
           variant={account.status === "logged-in" ? "secondary" : "primary"}
-          className="flex-1"
           onClick={() => api.loginAccount(account.id).catch((e) => toast(errorMessage(e), "error"))}
           icon={<LogIn size={13} />}>
           {account.status === "logged-in" ? t("openBrowser") : t("signIn")}
         </Button>
+        <span className="min-w-0 flex-1 truncate text-right text-[11px] text-muted">
+          {account.profile?.checkedAt ? t("lastChecked", { time: timeAgo(account.profile.checkedAt) }) : ""}
+        </span>
         {site?.canDetect && (
-          <Button
-            size="sm"
-            onClick={check}
-            disabled={checking}
-            icon={<RefreshCw size={13} className={checking ? "animate-spin-slow" : ""} />}>
-            {t("checkStatus")}
-          </Button>
+          <IconButton label={t("checkStatus")} onClick={check} disabled={checking}>
+            <RefreshCw size={14} className={checking ? "animate-spin-slow" : ""} />
+          </IconButton>
         )}
       </div>
     </div>
@@ -439,13 +494,28 @@ function AddAccountModal({ defaultGroupId, onClose }: { defaultGroupId?: string;
   const [proxy, setProxy] = useState("");
   const [groupIds, setGroupIds] = useState<string[]>(defaultGroupId ? [defaultGroupId] : []);
   const [busy, setBusy] = useState(false);
+  const [region, setRegion] = useState<"all" | "International" | "CN">(
+    init.locale === "zh_CN" ? "all" : "International",
+  );
+  const [type, setType] = useState<ContentType | "all">("all");
 
   const sites = useMemo(() => {
     const q = query.trim().toLowerCase();
     return init.sites.filter(
-      (s) => !q || s.label.toLowerCase().includes(q) || s.accountKey.includes(q) || s.homeUrl.includes(q),
+      (s) =>
+        (region === "all" || s.region === region || !!q) &&
+        (type === "all" || s.types.includes(type)) &&
+        (!q || s.label.toLowerCase().includes(q) || s.accountKey.includes(q) || s.homeUrl.includes(q)),
     );
-  }, [init.sites, query]);
+  }, [init.sites, query, region, type]);
+
+  const chip = (active: boolean) =>
+    cx(
+      "h-7 rounded-full border px-3 text-xs font-medium transition",
+      active
+        ? "border-primary-500 bg-primary-50 text-primary-700 dark:text-primary-500"
+        : "border-border text-muted hover:text-foreground",
+    );
 
   const existingCount = site ? state.accounts.filter((a) => a.accountKey === site.accountKey).length : 0;
 
@@ -496,26 +566,38 @@ function AddAccountModal({ defaultGroupId, onClose }: { defaultGroupId?: string;
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(["International", "CN", "all"] as const).map((r) => (
+              <button key={r} type="button" className={chip(region === r)} onClick={() => setRegion(r)}>
+                {r === "all" ? t("filterAll") : r === "CN" ? t("regionCN") : t("regionIntl")}
+              </button>
+            ))}
+            <span className="mx-1 h-4 w-px bg-border" />
+            {(["all", "DYNAMIC", "ARTICLE", "VIDEO", "PODCAST"] as const).map((x) => (
+              <button key={x} type="button" className={chip(type === x)} onClick={() => setType(x)}>
+                {x === "all" ? t("filterAnyType") : t(`type${x}` as "typeDYNAMIC")}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-4 gap-2">
             {sites.map((s) => (
               <button
                 key={s.accountKey}
                 type="button"
                 onClick={() => setSite(s)}
-                className="flex items-center gap-2.5 rounded-xl border border-border bg-surface p-2.5 text-left transition hover:border-primary-500 hover:bg-primary-50/40">
-                <Favicon src={s.faviconUrl} label={s.label} size={28} />
-                <div className="flex min-w-0 flex-col gap-1">
-                  <span className="truncate font-medium">{s.label}</span>
-                  <span className="flex flex-wrap gap-1">{typeChips(s)}</span>
-                </div>
+                className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface px-2 py-3.5 text-center transition hover:border-primary-500 hover:bg-primary-50/40 focus-visible:border-primary-500 focus-visible:outline-none">
+                <Favicon siteKey={s.accountKey} src={s.faviconUrl} label={s.label} size={36} />
+                <span className="w-full truncate font-medium">{s.label}</span>
+                <span className="flex flex-wrap justify-center gap-1">{typeChips(s)}</span>
               </button>
             ))}
+            {sites.length === 0 && <p className="col-span-4 py-8 text-center text-muted">{t("noSitesMatch")}</p>}
           </div>
         </div>
       ) : (
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-3 rounded-xl bg-elevated/60 p-3">
-            <Favicon src={site.faviconUrl} label={site.label} size={32} />
+            <Favicon siteKey={site.accountKey} src={site.faviconUrl} label={site.label} size={32} />
             <div className="flex min-w-0 flex-col gap-1">
               <span className="font-semibold">{site.label}</span>
               <span className="flex flex-wrap gap-1">{typeChips(site)}</span>
@@ -622,7 +704,7 @@ function EditAccountModal({ account, onClose }: { account: Account; onClose: () 
       open
       title={
         <span className="flex items-center gap-2">
-          <Favicon src={site?.faviconUrl} label={site?.label ?? ""} size={20} />
+          <Favicon src={site?.faviconUrl} siteKey={site?.accountKey} label={site?.label ?? ""} size={20} />
           {account.label}
         </span>
       }
@@ -725,7 +807,7 @@ function GroupMembersModal({ group, onClose }: { group: Group; onClose: () => vo
                   checked={on}
                   onChange={(v) => setSelected(v ? [...selected, a.id] : selected.filter((x) => x !== a.id))}
                 />
-                <Favicon src={site?.faviconUrl} label={site?.label ?? ""} size={20} />
+                <Favicon src={site?.faviconUrl} siteKey={site?.accountKey} label={site?.label ?? ""} size={20} />
                 <span className="flex-1 truncate">{a.label}</span>
                 <span className="text-xs text-muted">{site?.label}</span>
               </label>

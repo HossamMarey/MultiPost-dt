@@ -29,4 +29,18 @@ infoMap.DYNAMIC_E2E = {
   tags: [],
 };
 
+// Never resolves: used to test crash handling and the window cap.
+async function e2eHang() {
+  document.body.setAttribute("data-result", "hanging");
+  await new Promise(() => {});
+}
+
+const base = process.env.E2E_URL ?? "http://127.0.0.1:1/compose";
+for (const [name, injectUrl, fn] of [
+  ["DYNAMIC_E2E_LOGIN", base.replace("/compose", "/needs-login"), e2eInject],
+  ["DYNAMIC_E2E_HANG", base, e2eHang],
+] as const) {
+  infoMap[name] = { ...infoMap.DYNAMIC_E2E, name, injectUrl, injectFunction: fn as never, platformName: name };
+}
+
 (globalThis as Record<string, unknown>).__mp = { startPublish, getState, update, retryJob, cancelJob };

@@ -29,6 +29,7 @@
     "marked": "^18.0.14",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "simple-icons": "^16.33.0",
     "tailwindcss": "^3.4.17",
     "turndown": "^7.2.4",
     "typescript": "5.9"
@@ -37,27 +38,40 @@
     "appId": "com.leaperone.multipost.desktop",
     "productName": "MultiPost Desktop",
     "executableName": "MultiPost",
-    "copyright": "Copyright \u00a9 leaperone",
+    "copyright": "Copyright © leaperone",
     "directories": {
       "output": "release",
       "buildResources": "build"
     },
-    "files": ["dist/**/*", "!dist/e2e-main.js", "package.json"],
+    "files": [
+      "dist/**/*",
+      "!dist/e2e-main.js",
+      "package.json"
+    ],
     "asar": true,
-    "electronLanguages": ["en-US", "zh-CN"],
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.png",
@@ -76,7 +90,9 @@
       "artifactName": "MultiPost-Desktop-${version}-x64-portable.${ext}"
     },
     "linux": {
-      "target": ["dir"],
+      "target": [
+        "dir"
+      ],
       "icon": "build/icon.png",
       "category": "Utility"
     },

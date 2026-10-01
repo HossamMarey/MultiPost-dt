@@ -83,6 +83,16 @@ export function SettingsView() {
               onChange={(e) => set({ pageTimeoutSec: Number(e.target.value) })}
             />
           </Row>
+          <Row title={t("maxOpenWindows")} hint={t("maxOpenWindowsHint")}>
+            <input
+              type="number"
+              min={1}
+              max={30}
+              className="field w-20 text-center"
+              value={s.maxOpenWindows}
+              onChange={(e) => set({ maxOpenWindows: Number(e.target.value) })}
+            />
+          </Row>
           <Row title={t("showWindows")} hint={t("showWindowsHint")}>
             <Toggle checked={s.showPublishWindows} onChange={(v) => set({ showPublishWindows: v })} />
           </Row>

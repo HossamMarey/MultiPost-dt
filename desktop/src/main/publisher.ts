@@ -4,42 +4,54 @@
 import crypto from "node:crypto";
 import type { BrowserWindow } from "electron";
 import type { ArticleData, DynamicData, FileData, PodcastData, SyncData, VideoData } from "~sync/common";
-import type { Account, Draft, LocalFile, PublishJob, PublishRequest } from "../shared/types";
+import type { Account, Draft, JobStatus, LocalFile, PublishJob, PublishRequest } from "../shared/types";
 import { createAccountWindow } from "./browser-windows";
 import { markdownToHtml } from "./markdown";
 import { getPlatformInfo } from "./platforms";
-import { serveFile } from "./sessions";
+import { revokeFiles, serveFile } from "./sessions";
 import { getState, update } from "./store";
 
 // Same isolation the extension gets from chrome.scripting (ISOLATED world): page scripts cannot
 // tamper with the inject function, while the DOM is shared.
 const ISOLATED_WORLD_ID = 1001;
 // The inject functions resolve when they finish filling the form (or after publishing). Some keep
-// polling forever; after this long we stop waiting and consider the page handed over to the user.
+// polling forever; after this long we stop waiting and ask the user to look at the window.
 const INJECT_SETTLE_MS = 10 * 60_000;
-const LOGIN_URL_HINT = /(login|signin|sign-in|passport|account\/begin|oauth|sso)/i;
+// A renderer that stays unresponsive this long is treated as hung.
+const UNRESPONSIVE_MS = 45_000;
+const LOGIN_URL_HINT = /(login|signin|sign-in|sign_in|passport|account\/begin|oauth|sso|captcha|challenge)/i;
+const ACTIVE: JobStatus[] = ["queued", "loading", "injecting"];
 
 interface RunContext {
   syncDataByJob: Map<string, SyncData>;
+  fileTokens: string[];
+}
+
+interface JobWindow {
+  win: BrowserWindow;
+  finished: boolean;
+  autoPublish: boolean;
 }
 
 const runs = new Map<string, RunContext>();
-const windows = new Map<string, BrowserWindow>();
+const windows = new Map<string, JobWindow>();
 const queue: string[] = [];
 let active = 0;
 
-function toFileData(file: LocalFile | undefined): FileData | undefined {
-  return file ? serveFile(file) : undefined;
-}
-
-function buildData(draft: Draft): DynamicData | ArticleData | VideoData | PodcastData {
+function buildData(draft: Draft, tokens: string[]): DynamicData | ArticleData | VideoData | PodcastData {
+  const serve = (file: LocalFile) => {
+    const served = serveFile(file);
+    tokens.push(served.token);
+    return served.data;
+  };
+  const toFileData = (file: LocalFile | undefined): FileData | undefined => (file ? serve(file) : undefined);
   switch (draft.contentType) {
     case "DYNAMIC":
       return {
         title: draft.title,
         content: draft.content,
-        images: draft.images.map((f) => serveFile(f)),
-        videos: draft.videos.map((f) => serveFile(f)),
+        images: draft.images.map(serve),
+        videos: draft.videos.map(serve),
         tags: draft.tags,
         scheduledPublishTime: draft.scheduledPublishTime,
       } satisfies DynamicData;
@@ -98,7 +110,7 @@ export function startPublish(request: PublishRequest): string {
   if (error) throw new Error(error);
   const state = getState();
   const runId = crypto.randomUUID();
-  const ctx: RunContext = { syncDataByJob: new Map() };
+  const ctx: RunContext = { syncDataByJob: new Map(), fileTokens: [] };
   const jobs: PublishJob[] = [];
   const seen = new Set<string>();
 
@@ -119,16 +131,20 @@ export function startPublish(request: PublishRequest): string {
       platformName: info.platformName,
       status: "queued",
       attempts: 0,
+      autoPublish: request.autoPublish,
     };
     // Every job gets its own copy (and its own file tokens) of the payload.
     ctx.syncDataByJob.set(job.id, {
       platforms: [{ name: info.name, injectUrl: info.injectUrl, extraConfig: account.extraConfig }],
       isAutoPublish: request.autoPublish,
-      data: buildData(request.draft),
+      data: buildData(request.draft, ctx.fileTokens),
     });
     jobs.push(job);
   }
-  if (jobs.length === 0) throw new Error("No valid targets selected");
+  if (jobs.length === 0) {
+    revokeFiles(ctx.fileTokens);
+    throw new Error("No valid targets selected");
+  }
 
   runs.set(runId, ctx);
   update((s) => {
@@ -153,18 +169,82 @@ function setJob(jobId: string, patch: Partial<PublishJob>) {
   });
 }
 
+function jobStatus(jobId: string): JobStatus | undefined {
+  return getState().jobs.find((j) => j.id === jobId)?.status;
+}
+
+/** Close the oldest finished auto-published windows to make room. Windows awaiting review stay open. */
+function freeWindowSlots(limit: number) {
+  for (const [jobId, entry] of windows) {
+    if (windows.size < limit) return;
+    if (entry.finished && entry.autoPublish && jobStatus(jobId) === "done" && !entry.win.isDestroyed()) {
+      entry.win.destroy();
+      windows.delete(jobId);
+    }
+  }
+}
+
 function pump() {
-  const { concurrency } = getState().settings;
+  const { concurrency, maxOpenWindows } = getState().settings;
+  const windowLimit = Math.max(1, maxOpenWindows || 8);
   while (active < Math.max(1, concurrency) && queue.length > 0) {
+    if (windows.size >= windowLimit) freeWindowSlots(windowLimit);
+    // Every open window is a renderer process; wait until the user closes some instead of exhausting memory.
+    if (windows.size >= windowLimit) return;
     const jobId = queue.shift()!;
     active++;
     runJob(jobId)
-      .catch((error) => setJob(jobId, { status: "failed", error: (error as Error).message, finishedAt: Date.now() }))
+      .catch((error) => {
+        if (ACTIVE.includes(jobStatus(jobId)!)) {
+          setJob(jobId, { status: "failed", error: (error as Error).message, finishedAt: Date.now() });
+        }
+      })
       .finally(() => {
         active--;
+        const entry = windows.get(jobId);
+        if (entry) entry.finished = true;
         pump();
       });
   }
+}
+
+class JobAbort extends Error {}
+
+/** Rejects when the page crashes, hangs, or its window is closed — for the whole life of the job. */
+function watchdog(win: BrowserWindow): { aborted: Promise<never>; dispose: () => void } {
+  let reject!: (e: Error) => void;
+  const aborted = new Promise<never>((_, r) => {
+    reject = r;
+  });
+  aborted.catch(() => {}); // observed via Promise.race
+  const wc = win.webContents;
+  let hangTimer: NodeJS.Timeout | null = null;
+  const onGone = (_e: unknown, details: Electron.RenderProcessGoneDetails) =>
+    reject(new JobAbort(`The page crashed (${details.reason}). Retry, or check the account in its browser.`));
+  const onUnresponsive = () => {
+    hangTimer ??= setTimeout(() => reject(new JobAbort("The page stopped responding.")), UNRESPONSIVE_MS);
+  };
+  const onResponsive = () => {
+    if (hangTimer) clearTimeout(hangTimer);
+    hangTimer = null;
+  };
+  const onClosed = () => reject(new JobAbort("Window closed"));
+  wc.on("render-process-gone", onGone);
+  win.on("unresponsive", onUnresponsive);
+  win.on("responsive", onResponsive);
+  win.on("closed", onClosed);
+  return {
+    aborted,
+    dispose: () => {
+      if (hangTimer) clearTimeout(hangTimer);
+      if (!win.isDestroyed()) {
+        wc.removeListener("render-process-gone", onGone);
+        win.removeListener("unresponsive", onUnresponsive);
+        win.removeListener("responsive", onResponsive);
+        win.removeListener("closed", onClosed);
+      }
+    },
+  };
 }
 
 function waitForLoad(win: BrowserWindow, url: string, timeoutMs: number): Promise<void> {
@@ -182,31 +262,54 @@ function waitForLoad(win: BrowserWindow, url: string, timeoutMs: number): Promis
     const onFail = (_e: unknown, code: number, desc: string, _url: string, isMainFrame: boolean) => {
       if (!isMainFrame || code === -3 /* ABORTED: superseded by a redirect */) return;
       cleanup();
-      reject(new Error(`Page failed to load: ${desc} (${code})`));
-    };
-    const onClosed = () => {
-      cleanup();
-      reject(new Error("Window closed"));
+      reject(new Error(`Page failed to load: ${desc} (${code}). Check the connection or this account's proxy.`));
     };
     function cleanup() {
       clearTimeout(timer);
-      wc.removeListener("did-finish-load", onFinish);
-      wc.removeListener("did-fail-load", onFail);
-      win.removeListener("closed", onClosed);
+      if (!wc.isDestroyed()) {
+        wc.removeListener("did-finish-load", onFinish);
+        wc.removeListener("did-fail-load", onFail);
+      }
     }
     wc.on("did-finish-load", onFinish);
     wc.on("did-fail-load", onFail);
-    win.on("closed", onClosed);
     wc.loadURL(url).catch(() => {
       // Errors are reported through did-fail-load.
     });
   });
 }
 
+/** Rough registrable domain ("creator.douyin.com" → "douyin.com", "mp.sohu.com.cn" → "sohu.com.cn"). */
+function siteOf(url: string): string {
+  try {
+    const parts = new URL(url).hostname.split(".");
+    const take = parts.length > 2 && /^(com|net|org|gov|edu|co)$/.test(parts[parts.length - 2]) ? 3 : 2;
+    return parts.slice(-take).join(".");
+  } catch {
+    return "";
+  }
+}
+
+function looksLikeLogin(url: string, expected: string): boolean {
+  try {
+    const u = new URL(url);
+    return LOGIN_URL_HINT.test(u.hostname + u.pathname) && u.pathname !== new URL(expected).pathname;
+  } catch {
+    return false;
+  }
+}
+
+function markLoggedOut(accountId: string) {
+  update((s) => {
+    const a = s.accounts.find((x) => x.id === accountId);
+    if (a) a.status = "logged-out";
+  });
+}
+
 async function runJob(jobId: string) {
   const state = getState();
   const job = state.jobs.find((j) => j.id === jobId);
-  if (!job || job.status === "cancelled") return;
+  if (!job || job.status !== "queued") return;
   const ctx = runs.get(job.runId);
   const syncData = ctx?.syncDataByJob.get(jobId);
   const account = state.accounts.find((a) => a.id === job.accountId);
@@ -227,54 +330,81 @@ async function runJob(jobId: string) {
     title: `${info.platformName} · ${account.label}`,
     show: settings.showPublishWindows,
   });
-  windows.set(jobId, win);
-  let cancelled = false;
+  windows.set(jobId, { win, finished: false, autoPublish: syncData.isAutoPublish });
   win.on("closed", () => {
     windows.delete(jobId);
-    const current = getState().jobs.find((j) => j.id === jobId);
-    if (current && (current.status === "loading" || current.status === "injecting")) {
-      cancelled = true;
+    if (ACTIVE.includes(jobStatus(jobId)!)) {
       setJob(jobId, { status: "cancelled", error: "Window closed", finishedAt: Date.now() });
     }
+    pump();
   });
 
-  await waitForLoad(win, injectUrl, settings.pageTimeoutSec * 1000);
-  if (cancelled || win.isDestroyed()) return;
+  const dog = watchdog(win);
+  try {
+    await Promise.race([waitForLoad(win, injectUrl, settings.pageTimeoutSec * 1000), dog.aborted]);
 
-  const landed = win.webContents.getURL();
-  if (new URL(landed).host !== new URL(injectUrl).host && LOGIN_URL_HINT.test(landed)) {
-    update((s) => {
-      const a = s.accounts.find((x) => x.id === account.id);
-      if (a) a.status = "logged-out";
-    });
-    throw new Error(`Not signed in — redirected to ${new URL(landed).host}. Sign in to this account and retry.`);
-  }
+    const landed = win.webContents.getURL();
+    if (siteOf(landed) !== siteOf(injectUrl) || looksLikeLogin(landed, injectUrl)) {
+      if (looksLikeLogin(landed, injectUrl)) {
+        markLoggedOut(account.id);
+        throw new Error(`Not signed in — the site sent this account to ${new URL(landed).host}. Sign in and retry.`);
+      }
+      throw new Error(`The publish page redirected to ${new URL(landed).host}. Check the account in its browser.`);
+    }
 
-  setJob(jobId, { status: "injecting", url: landed });
-  const code = `(${info.injectFunction.toString()})(${JSON.stringify({ ...syncData, isAutoPublish: syncData.isAutoPublish })})`;
-  const settled = await Promise.race([
-    win.webContents
-      .executeJavaScriptInIsolatedWorld(ISOLATED_WORLD_ID, [{ code }], true)
-      .then(() => ({ ok: true as const }))
-      .catch((error: Error) => ({ ok: false as const, error })),
-    new Promise<{ ok: true; timedOut: true }>((resolve) =>
-      setTimeout(() => resolve({ ok: true, timedOut: true }), INJECT_SETTLE_MS),
-    ),
-  ]);
-  if (cancelled) return;
+    setJob(jobId, { status: "injecting", url: landed });
+    const code = `(${info.injectFunction.toString()})(${JSON.stringify(syncData)})`;
+    let settleTimer: NodeJS.Timeout | undefined;
+    const outcome = await Promise.race([
+      win.webContents
+        .executeJavaScriptInIsolatedWorld(ISOLATED_WORLD_ID, [{ code }], true)
+        .then(() => ({ kind: "resolved" as const }))
+        .catch((error: Error) => ({ kind: "rejected" as const, error })),
+      new Promise<{ kind: "timeout" }>((resolve) => {
+        settleTimer = setTimeout(() => resolve({ kind: "timeout" }), INJECT_SETTLE_MS);
+      }),
+      dog.aborted,
+    ]).finally(() => clearTimeout(settleTimer));
 
-  if (!settled.ok) {
-    // A navigation after submitting (the usual "post published, go to the feed" redirect) tears down the
-    // world the script ran in. That is a success, not a failure.
-    if (win.isDestroyed()) return;
-    const err = (settled as { error?: Error }).error;
-    const msg = err?.message ?? String(err);
-    const navigatedAway = win.webContents.getURL() !== landed;
-    if (!navigatedAway) throw new Error(msg);
-  }
-  setJob(jobId, { status: "done", finishedAt: Date.now(), url: win.isDestroyed() ? landed : win.webContents.getURL() });
-  if (settings.closeWindowsOnSuccess && syncData.isAutoPublish && !win.isDestroyed()) {
-    setTimeout(() => !win.isDestroyed() && win.close(), 5000);
+    if (!ACTIVE.includes(jobStatus(jobId)!)) return; // cancelled meanwhile
+    const finalUrl = win.isDestroyed() ? landed : win.webContents.getURL();
+
+    if (outcome.kind === "timeout") {
+      setJob(jobId, {
+        status: "attention",
+        error: "Still working after 10 minutes. Check the window to finish or retry.",
+        finishedAt: Date.now(),
+        url: finalUrl,
+      });
+      return;
+    }
+    if (outcome.kind === "rejected") {
+      if (finalUrl === landed) throw new Error(outcome.error?.message || "The publish script failed");
+      // The script's world was torn down by a navigation. After submitting, platforms usually redirect
+      // to the feed/manage page — success. A login/verification page or another site is not.
+      if (looksLikeLogin(finalUrl, injectUrl)) {
+        markLoggedOut(account.id);
+        throw new Error(`The site asked this account to sign in again (${new URL(finalUrl).host}).`);
+      }
+      if (siteOf(finalUrl) !== siteOf(injectUrl)) {
+        setJob(jobId, {
+          status: "attention",
+          error: `The page moved to ${new URL(finalUrl).host}. Check the window.`,
+          finishedAt: Date.now(),
+          url: finalUrl,
+        });
+        return;
+      }
+    }
+    setJob(jobId, { status: "done", finishedAt: Date.now(), url: finalUrl });
+    if (settings.closeWindowsOnSuccess && syncData.isAutoPublish && !win.isDestroyed()) {
+      setTimeout(() => !win.isDestroyed() && win.close(), 5000);
+    }
+  } catch (error) {
+    if (error instanceof JobAbort && error.message === "Window closed") return; // handled by "closed"
+    throw error;
+  } finally {
+    dog.dispose();
   }
 }
 
@@ -288,9 +418,10 @@ export function retryJob(jobId: string) {
   if (!job || !runs.get(job.runId)?.syncDataByJob.has(jobId)) {
     throw new Error("This job's files are no longer available. Publish again from the composer.");
   }
-  if (job.status === "loading" || job.status === "injecting" || job.status === "queued") return;
-  const win = windows.get(jobId);
-  if (win && !win.isDestroyed()) win.destroy();
+  if (ACTIVE.includes(job.status)) return;
+  const entry = windows.get(jobId);
+  windows.delete(jobId);
+  if (entry && !entry.win.isDestroyed()) entry.win.destroy();
   setJob(jobId, { status: "queued", error: undefined, finishedAt: undefined });
   queue.push(jobId);
   pump();
@@ -299,20 +430,23 @@ export function retryJob(jobId: string) {
 export function cancelJob(jobId: string) {
   const idx = queue.indexOf(jobId);
   if (idx >= 0) queue.splice(idx, 1);
-  const job = getState().jobs.find((j) => j.id === jobId);
-  if (job && (job.status === "queued" || job.status === "loading" || job.status === "injecting")) {
+  if (ACTIVE.includes(jobStatus(jobId)!)) {
     setJob(jobId, { status: "cancelled", error: "Cancelled", finishedAt: Date.now() });
   }
-  const win = windows.get(jobId);
-  if (win && !win.isDestroyed()) win.destroy();
+  const entry = windows.get(jobId);
+  if (entry && !entry.win.isDestroyed()) entry.win.destroy();
 }
 
 export function showJobWindow(jobId: string): boolean {
-  const win = windows.get(jobId);
-  if (!win || win.isDestroyed()) return false;
-  win.show();
-  win.focus();
+  const entry = windows.get(jobId);
+  if (!entry || entry.win.isDestroyed()) return false;
+  entry.win.show();
+  entry.win.focus();
   return true;
+}
+
+export function openJobWindowIds(): string[] {
+  return [...windows.keys()];
 }
 
 export function canRetry(jobId: string): boolean {
@@ -320,6 +454,20 @@ export function canRetry(jobId: string): boolean {
   return !!job && !!runs.get(job.runId)?.syncDataByJob.has(jobId);
 }
 
+/** Drop in-memory payloads (and file access) of runs removed from history. */
+export function forgetRuns(runIds: string[]) {
+  for (const id of runIds) {
+    const ctx = runs.get(id);
+    if (!ctx) continue;
+    revokeFiles(ctx.fileTokens);
+    runs.delete(id);
+  }
+}
+
 export function activeJobCount() {
   return active + queue.length;
+}
+
+export function waitingForWindowCount() {
+  return queue.length;
 }

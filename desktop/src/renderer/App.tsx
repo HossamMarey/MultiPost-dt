@@ -31,7 +31,21 @@ export function App() {
   );
 }
 
+function useThemeClass(theme: "system" | "light" | "dark") {
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const dark = theme === "dark" || (theme === "system" && media.matches);
+      document.documentElement.classList.toggle("dark", dark);
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
+}
+
 function Shell({ init, state }: { init: InitData; state: AppState }) {
+  useThemeClass(state.settings.theme);
   const [view, setView] = useState<View>(() =>
     state.accounts.length === 0 ? { name: "accounts" } : { name: "compose" },
   );

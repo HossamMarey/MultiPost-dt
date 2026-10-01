@@ -60,6 +60,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+class NetworkError extends Error {}
+
 const detecting = new Map<string, Promise<Account>>();
 
 /** Runs the extension's account getter for this site on the site's own origin, in a hidden window. */
@@ -72,17 +74,25 @@ export function detectAccount(accountId: string): Promise<Account> {
     if (!home) return account;
     const win = await createAccountWindow(account, { title: "detect", show: false, webSecurity: false });
     try {
-      await withTimeout(
-        win.loadURL(home).catch(() => {}),
+      // Network trouble (offline, bad proxy, timeout) says nothing about the sign-in: keep the status.
+      const loaded = await withTimeout(
+        win.loadURL(home).then(
+          () => true,
+          (e: { code?: string }) => e?.code === "ERR_ABORTED", // redirects abort the first navigation
+        ),
         30_000,
         "Timed out loading the site",
-      );
+      ).catch(() => false);
+      if (!loaded) throw new NetworkError(`Could not reach ${new URL(home).host}`);
       const code = `${getGettersCode()}\n;window.__multipostGetters[${JSON.stringify(account.accountKey)}]()`;
       const info = (await withTimeout(
         win.webContents.executeJavaScript(code, true),
         30_000,
         "Timed out reading the account",
-      )) as {
+      ).catch((error: Error) => {
+        if (/Timed out/.test(error.message)) throw new NetworkError(error.message);
+        return null; // the getters throw when the page has no signed-in user
+      })) as {
         username?: string;
         accountId?: string;
         avatarUrl?: string;
@@ -107,10 +117,8 @@ export function detectAccount(accountId: string): Promise<Account> {
       });
     } catch (error) {
       console.warn(`[accounts] detect ${account.accountKey} failed:`, (error as Error).message);
-      update((s) => {
-        const a = s.accounts.find((x) => x.id === accountId);
-        if (a) a.status = "logged-out";
-      });
+      if (!(error instanceof NetworkError)) throw error;
+      throw new Error(`${(error as Error).message}. Sign-in status was not changed.`);
     } finally {
       if (!win.isDestroyed()) win.destroy();
     }

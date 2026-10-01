@@ -59,6 +59,7 @@ export function listSites(): SiteMeta[] {
       faviconUrl: platforms.find((p) => p.faviconUrl)?.faviconUrl,
       types: [...new Set(platforms.map((p) => p.type))],
       canDetect: ACCOUNT_GETTER_KEYS.includes(accountKey),
+      region: platforms.some((p) => p.tags.includes("International")) ? "International" : "CN",
     });
   }
   return sites.sort((a, b) => a.label.localeCompare(b.label));

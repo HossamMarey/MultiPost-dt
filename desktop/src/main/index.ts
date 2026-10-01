@@ -15,20 +15,35 @@ import {
 import { closeLoginWindow, detectAccount, openLoginWindow } from "./accounts";
 import { currentLocale } from "./i18n-shim";
 import { listPlatforms, listSites } from "./platforms";
-import { activeJobCount, canRetry, cancelJob, retryJob, showJobWindow, startPublish } from "./publisher";
+import {
+  activeJobCount,
+  canRetry,
+  cancelJob,
+  forgetRuns,
+  openJobWindowIds,
+  retryJob,
+  showJobWindow,
+  startPublish,
+} from "./publisher";
 import {
   cleanUserAgent,
   clearAccountSession,
+  getOnlyProxyCredentials,
   getProxyCredentials,
+  isSafeAccountId,
+  partitionFor,
   registerSchemes,
-  scheduleRemovePartitionDir,
+  removePartitionDirs,
+  validateProxy,
 } from "./sessions";
 import { flush, getState, loadState, onChange, replaceState, update } from "./store";
 
 registerSchemes();
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
+// A second instance must exit before it touches anything: the first one owns the data file.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.exit(0);
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -189,12 +204,13 @@ function registerIpc() {
     "account:create",
     (_e, input: { accountKey: string; label: string; proxy?: string; groupIds?: string[] }) => {
       if (!listSites().some((s) => s.accountKey === input.accountKey)) throw new Error("Unknown site");
+      validateProxy(input.proxy);
       const id = crypto.randomUUID();
       const account: Account = {
         id,
         accountKey: input.accountKey,
         label: input.label?.trim().slice(0, 80) || "Account",
-        partition: `persist:acc-${id}`,
+        partition: partitionFor(id),
         proxy: input.proxy?.trim() || undefined,
         status: "unknown",
         createdAt: Date.now(),
@@ -207,6 +223,7 @@ function registerIpc() {
     },
   );
   ipcMain.handle("account:update", (_e, id: string, patch: Partial<Account>) => {
+    if ("proxy" in patch) validateProxy(patch.proxy);
     update((s) => {
       const a = s.accounts.find((x) => x.id === id);
       if (a) Object.assign(a, sanitizeAccountPatch(patch));
@@ -231,7 +248,10 @@ function registerIpc() {
       s.accounts = s.accounts.filter((a) => a.id !== id);
       for (const g of s.groups) g.accountIds = g.accountIds.filter((x) => x !== id);
     });
-    scheduleRemovePartitionDir(account);
+    // Chromium keeps the folder locked while the session is loaded (always on Windows): delete on next start.
+    update((s) => {
+      s.pendingPartitionDeletes = [...new Set([...(s.pendingPartitionDeletes ?? []), account.partition])];
+    });
   });
   ipcMain.handle("account:login", (_e, id: string) => openLoginWindow(id));
   ipcMain.handle("account:detect", (_e, id: string) => detectAccount(id));
@@ -279,7 +299,9 @@ function registerIpc() {
   ipcMain.handle("job:cancel", (_e, id: string) => cancelJob(id));
   ipcMain.handle("job:show", (_e, id: string) => showJobWindow(id));
   ipcMain.handle("job:canRetry", (_e, ids: string[]) => ids.filter((id) => canRetry(id)));
+  ipcMain.handle("job:openWindows", () => openJobWindowIds());
   ipcMain.handle("history:clear", () => {
+    const before = new Set(getState().runs.map((r) => r.id));
     update((s) => {
       const running = new Set(
         s.jobs
@@ -290,6 +312,8 @@ function registerIpc() {
       const keep = new Set(s.runs.flatMap((r) => r.jobIds));
       s.jobs = s.jobs.filter((j) => keep.has(j.id));
     });
+    const after = new Set(getState().runs.map((r) => r.id));
+    forgetRuns([...before].filter((id) => !after.has(id)));
   });
 
   // Settings & data
@@ -298,6 +322,7 @@ function registerIpc() {
       const next = { ...s.settings, ...patch };
       next.concurrency = Math.min(10, Math.max(1, Math.round(Number(next.concurrency) || 1)));
       next.pageTimeoutSec = Math.min(300, Math.max(10, Math.round(Number(next.pageTimeoutSec) || 60)));
+      next.maxOpenWindows = Math.min(30, Math.max(1, Math.round(Number(next.maxOpenWindows) || 8)));
       s.settings = next;
     });
     if (patch.theme) nativeTheme.themeSource = patch.theme;
@@ -326,13 +351,44 @@ function registerIpc() {
       throw new Error("This file is not a MultiPost Desktop backup");
     }
     const current = getState();
-    // Merge: imported accounts keep their ids/partitions, so sessions on this machine are reused if present.
-    const accounts = [
-      ...current.accounts.filter((a) => !parsed.accounts!.some((b) => b.id === a.id)),
-      ...parsed.accounts,
-    ];
-    const groups = [...current.groups.filter((g) => !parsed.groups!.some((b) => b.id === g.id)), ...parsed.groups];
-    replaceState({ ...current, accounts, groups, settings: { ...current.settings, ...(parsed.settings ?? {}) } });
+    const sites = new Set(listSites().map((x) => x.accountKey));
+    // Never trust paths from a file: partitions are rebuilt from validated ids.
+    const imported: Account[] = parsed.accounts
+      .filter((a) => isSafeAccountId(a?.id) && sites.has(a.accountKey))
+      .map((a) => {
+        let proxy = typeof a.proxy === "string" ? a.proxy.trim() : undefined;
+        try {
+          validateProxy(proxy);
+        } catch {
+          proxy = undefined;
+        }
+        return {
+          id: a.id,
+          accountKey: a.accountKey,
+          label: String(a.label ?? "Account").slice(0, 80),
+          partition: partitionFor(a.id),
+          proxy: proxy || undefined,
+          userAgent: typeof a.userAgent === "string" ? a.userAgent : undefined,
+          extraConfig: a.extraConfig && typeof a.extraConfig === "object" ? a.extraConfig : undefined,
+          notes: typeof a.notes === "string" ? a.notes : undefined,
+          status: "unknown",
+          createdAt: Number(a.createdAt) || Date.now(),
+        } satisfies Account;
+      });
+    const importedIds = new Set(imported.map((a) => a.id));
+    const accounts = [...current.accounts.filter((a) => !importedIds.has(a.id)), ...imported];
+    const validIds = new Set(accounts.map((a) => a.id));
+    const importedGroups: Group[] = parsed.groups
+      .filter((g) => typeof g?.id === "string" && typeof g.name === "string")
+      .map((g) => ({
+        id: g.id,
+        name: g.name.slice(0, 60),
+        color: typeof g.color === "string" && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color : GROUP_COLORS[0],
+        accountIds: (Array.isArray(g.accountIds) ? g.accountIds : []).filter((x) => validIds.has(x)),
+        createdAt: Number(g.createdAt) || Date.now(),
+      }));
+    const groups = [...current.groups.filter((g) => !importedGroups.some((b) => b.id === g.id)), ...importedGroups];
+    replaceState({ ...current, accounts, groups });
     return true;
   });
   ipcMain.handle("data:openFolder", () => shell.openPath(app.getPath("userData")));
@@ -355,8 +411,9 @@ app.on("second-instance", () => {
 
 // Proxy authentication for accounts configured with user:pass proxies.
 app.on("login", (event, webContents, _details, authInfo, callback) => {
-  if (!authInfo.isProxy || !webContents) return;
-  const creds = getProxyCredentials(webContents.session);
+  if (!authInfo.isProxy) return;
+  // Service-worker requests have no webContents; fall back to the only configured credentials.
+  const creds = webContents ? getProxyCredentials(webContents.session) : getOnlyProxyCredentials();
   if (creds) {
     event.preventDefault();
     callback(creds.username, creds.password);
@@ -364,10 +421,18 @@ app.on("login", (event, webContents, _details, authInfo, callback) => {
 });
 
 app.whenReady().then(() => {
+  if (!isPrimaryInstance) return;
   // Default UA for every session, then each account session sets its own (see sessions.ts).
   app.userAgentFallback = cleanUserAgent(app.userAgentFallback);
   session.defaultSession.setUserAgent(cleanUserAgent(session.defaultSession.getUserAgent()));
   loadState();
+  const pending = getState().pendingPartitionDeletes ?? [];
+  if (pending.length) {
+    const remaining = removePartitionDirs(pending);
+    update((s) => {
+      s.pendingPartitionDeletes = remaining;
+    });
+  }
   nativeTheme.themeSource = getState().settings.theme;
   if (process.platform !== "darwin") Menu.setApplicationMenu(null);
   app.setAppUserModelId("com.leaperone.multipost.desktop");

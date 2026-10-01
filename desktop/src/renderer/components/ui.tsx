@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { BRAND_ICONS, fallbackColor } from "../brand-icons";
 
 export function cx(...classes: (string | false | null | undefined)[]) {
   return classes.filter(Boolean).join(" ");
@@ -110,23 +111,57 @@ export function Checkbox({
   );
 }
 
+/** Site mark: bundled brand logo, else the site's favicon, else a colored monogram. */
 export function Favicon({
   src,
   label,
+  siteKey,
   size = 20,
   className,
-}: { src?: string; label: string; size?: number; className?: string }) {
+}: { src?: string; label: string; siteKey?: string; size?: number; className?: string }) {
+  const brand = siteKey ? BRAND_ICONS[siteKey] : undefined;
   const [failed, setFailed] = useState(!src);
   useEffect(() => setFailed(!src), [src]);
-  if (failed) {
+  const box = { width: size, height: size };
+
+  if (brand) {
+    // Black/near-black marks (X, Threads, TikTok, Medium…) use the foreground color so they work in dark mode.
+    const dark =
+      Number.parseInt(brand.hex.slice(0, 2), 16) +
+        Number.parseInt(brand.hex.slice(2, 4), 16) +
+        Number.parseInt(brand.hex.slice(4, 6), 16) <
+      90;
     return (
       <span
         className={cx(
-          "inline-flex shrink-0 items-center justify-center rounded-md bg-primary-100 font-semibold text-primary-700",
+          "inline-flex shrink-0 items-center justify-center rounded-md",
+          dark && "bg-foreground",
           className,
         )}
-        style={{ width: size, height: size, fontSize: size * 0.5 }}>
-        {label.trim().charAt(0).toUpperCase() || "?"}
+        style={{ ...box, background: dark ? undefined : `#${brand.hex}` }}
+        aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          width={size * 0.62}
+          height={size * 0.62}
+          className={dark ? "fill-background" : "fill-white"}>
+          <title>{label}</title>
+          <path d={brand.path} />
+        </svg>
+      </span>
+    );
+  }
+  if (failed) {
+    const initial = label.trim().charAt(0).toUpperCase() || "?";
+    return (
+      <span
+        className={cx(
+          "inline-flex shrink-0 items-center justify-center rounded-md font-semibold text-white",
+          className,
+        )}
+        style={{ ...box, fontSize: size * 0.48, background: fallbackColor(siteKey || label) }}
+        aria-hidden="true">
+        {initial}
       </span>
     );
   }
@@ -139,8 +174,10 @@ export function Favicon({
       draggable={false}
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
+      // Some sites answer with a 1×1 or empty image instead of an error.
+      onLoad={(e) => (e.currentTarget.naturalWidth < 8 ? setFailed(true) : undefined)}
       className={cx("shrink-0 rounded-md bg-white object-contain", className)}
-      style={{ width: size, height: size }}
+      style={box}
     />
   );
 }
