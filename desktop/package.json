@@ -38,40 +38,27 @@
     "appId": "com.leaperone.multipost.desktop",
     "productName": "MultiPost Desktop",
     "executableName": "MultiPost",
-    "copyright": "Copyright © leaperone",
+    "copyright": "Copyright \u00a9 leaperone",
     "directories": {
       "output": "release",
       "buildResources": "build"
     },
-    "files": [
-      "dist/**/*",
-      "!dist/e2e-main.js",
-      "package.json"
-    ],
+    "files": ["dist/**/*", "!dist/e2e-main.js", "package.json"],
     "asar": true,
-    "electronLanguages": [
-      "en-US",
-      "zh-CN"
-    ],
+    "electronLanguages": ["en-US", "zh-CN"],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         },
         {
           "target": "portable",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         },
         {
           "target": "zip",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         }
       ],
       "icon": "build/icon.png",
@@ -90,12 +77,20 @@
       "artifactName": "MultiPost-Desktop-${version}-x64-portable.${ext}"
     },
     "linux": {
-      "target": [
-        "dir"
-      ],
+      "target": ["dir"],
       "icon": "build/icon.png",
       "category": "Utility"
     },
-    "publish": null
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "HossamMarey",
+        "repo": "MultiPost-dt",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

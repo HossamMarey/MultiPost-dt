@@ -58,7 +58,8 @@ await Promise.all([
     platform: "node",
     format: "cjs",
     target: "node22",
-    external: ["electron"],
+    // Runtime dependency shipped in node_modules (see package.json "dependencies").
+    external: ["electron", "electron-updater"],
     loader: { ".json": "json" },
   }),
   esbuild.build({

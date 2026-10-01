@@ -37,6 +37,7 @@ import {
   validateProxy,
 } from "./sessions";
 import { flush, getState, loadState, onChange, replaceState, update } from "./store";
+import { startAutoUpdates } from "./updater";
 
 registerSchemes();
 
@@ -376,6 +377,12 @@ function registerIpc() {
         } satisfies Account;
       });
     const importedIds = new Set(imported.map((a) => a.id));
+    // A restored account must not have its (reused) profile folder wiped at the next start.
+    update((s) => {
+      s.pendingPartitionDeletes = (s.pendingPartitionDeletes ?? []).filter(
+        (p) => !imported.some((a) => a.partition === p),
+      );
+    });
     const accounts = [...current.accounts.filter((a) => !importedIds.has(a.id)), ...imported];
     const validIds = new Set(accounts.map((a) => a.id));
     const importedGroups: Group[] = parsed.groups
@@ -414,11 +421,19 @@ app.on("login", (event, webContents, _details, authInfo, callback) => {
   if (!authInfo.isProxy) return;
   // Service-worker requests have no webContents; fall back to the only configured credentials.
   const creds = webContents ? getProxyCredentials(webContents.session) : getOnlyProxyCredentials();
-  if (creds) {
-    event.preventDefault();
-    callback(creds.username, creds.password);
-  }
+  if (!creds) return;
+  event.preventDefault();
+  // Chromium asks again after a rejected password; give up after a retry instead of looping
+  // until the page times out, so the job fails with a proxy error.
+  const key = `${creds.username}@${authInfo.host}:${authInfo.port}`;
+  const attempts = (proxyAuthAttempts.get(key) ?? 0) + 1;
+  proxyAuthAttempts.set(key, attempts);
+  setTimeout(() => proxyAuthAttempts.delete(key), 30_000);
+  if (attempts > 2) callback();
+  else callback(creds.username, creds.password);
 });
+
+const proxyAuthAttempts = new Map<string, number>();
 
 app.whenReady().then(() => {
   if (!isPrimaryInstance) return;
@@ -438,6 +453,7 @@ app.whenReady().then(() => {
   app.setAppUserModelId("com.leaperone.multipost.desktop");
   registerIpc();
   createMainWindow();
+  startAutoUpdates();
 });
 
 app.on("before-quit", () => {

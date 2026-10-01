@@ -11,7 +11,7 @@ await esbuild.build({
   platform: "node",
   format: "cjs",
   target: "node22",
-  external: ["electron"],
+  external: ["electron", "electron-updater"],
   nodePaths: [path.join(here, "../node_modules")],
   tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
   plugins: [

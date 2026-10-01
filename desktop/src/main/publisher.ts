@@ -173,11 +173,19 @@ function jobStatus(jobId: string): JobStatus | undefined {
   return getState().jobs.find((j) => j.id === jobId)?.status;
 }
 
-/** Close the oldest finished auto-published windows to make room. Windows awaiting review stay open. */
+/**
+ * Close the oldest windows nobody needs to make room: auto-published successes first, then failed or
+ * cancelled jobs (the error is in Activity, and Retry reopens the page). Windows awaiting review stay open.
+ */
 function freeWindowSlots(limit: number) {
+  const reclaimable = (jobId: string, entry: JobWindow) => {
+    const status = jobStatus(jobId);
+    if (!entry.finished || entry.win.isDestroyed()) return false;
+    return (entry.autoPublish && status === "done") || status === "failed" || status === "cancelled";
+  };
   for (const [jobId, entry] of windows) {
     if (windows.size < limit) return;
-    if (entry.finished && entry.autoPublish && jobStatus(jobId) === "done" && !entry.win.isDestroyed()) {
+    if (reclaimable(jobId, entry)) {
       entry.win.destroy();
       windows.delete(jobId);
     }
@@ -339,9 +347,15 @@ async function runJob(jobId: string) {
     pump();
   });
 
+  // Cancelled while the window was being created: never load (let alone auto-submit) the page.
+  if (jobStatus(jobId) !== "loading") {
+    if (!win.isDestroyed()) win.destroy();
+    return;
+  }
   const dog = watchdog(win);
   try {
     await Promise.race([waitForLoad(win, injectUrl, settings.pageTimeoutSec * 1000), dog.aborted]);
+    if (jobStatus(jobId) !== "loading") return;
 
     const landed = win.webContents.getURL();
     if (siteOf(landed) !== siteOf(injectUrl) || looksLikeLogin(landed, injectUrl)) {
@@ -386,7 +400,8 @@ async function runJob(jobId: string) {
         markLoggedOut(account.id);
         throw new Error(`The site asked this account to sign in again (${new URL(finalUrl).host}).`);
       }
-      if (siteOf(finalUrl) !== siteOf(injectUrl)) {
+      // Without auto-submit nothing should navigate away from the form: let the user check.
+      if (siteOf(finalUrl) !== siteOf(injectUrl) || !syncData.isAutoPublish) {
         setJob(jobId, {
           status: "attention",
           error: `The page moved to ${new URL(finalUrl).host}. Check the window.`,

@@ -30,7 +30,9 @@ function readSavedLocale(): "en" | "zh_CN" {
   } catch {
     // first run
   }
-  return app.getLocale?.().startsWith("zh") ? "zh_CN" : "en";
+  // app.getLocale() is empty before "ready"; Intl reflects the OS language already.
+  const system = Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG || "";
+  return system.toLowerCase().startsWith("zh") ? "zh_CN" : "en";
 }
 
 export const currentLocale = readSavedLocale();

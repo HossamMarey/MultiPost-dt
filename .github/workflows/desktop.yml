@@ -71,7 +71,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path upload | Out-Null
-          Get-ChildItem release -File | Where-Object { $_.Extension -in ".exe", ".zip", ".blockmap" } | Copy-Item -Destination upload
+          Get-ChildItem release -File | Where-Object { ($_.Extension -in @(".exe", ".zip", ".blockmap", ".yml")) -and ($_.Name -ne "builder-debug.yml") } | Copy-Item -Destination upload
           Get-ChildItem upload
       - uses: actions/upload-artifact@v4
         with:

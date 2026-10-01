@@ -31,6 +31,10 @@ export async function createAccountWindow(
     autoHideMenuBar: true,
     webPreferences,
   });
+  // Never let WebRTC reveal the real IP behind an account's proxy (or link accounts by LAN IP).
+  const rtcPolicy = account.proxy?.trim() ? "disable_non_proxied_udp" : "default_public_interface_only";
+  win.webContents.setWebRTCIPHandlingPolicy(rtcPolicy);
+  win.webContents.on("did-create-window", (child) => child.webContents.setWebRTCIPHandlingPolicy(rtcPolicy));
   win.on("page-title-updated", (event, pageTitle) => {
     event.preventDefault();
     win.setTitle(`${opts.title} — ${pageTitle}`);
@@ -38,7 +42,8 @@ export async function createAccountWindow(
   // Popups (OAuth, upload dialogs) stay in the same account session; non-web links go to the OS.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (!/^https?:/i.test(url) && url !== "about:blank") {
-      shell.openExternal(url).catch(() => {});
+      // Untrusted pages may only hand mailto: links to the OS; other schemes can launch local programs.
+      if (/^mailto:/i.test(url)) shell.openExternal(url).catch(() => {});
       return { action: "deny" };
     }
     return {
