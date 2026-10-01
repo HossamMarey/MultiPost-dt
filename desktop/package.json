@@ -1,0 +1,85 @@
+{
+  "name": "multipost-desktop",
+  "productName": "MultiPost Desktop",
+  "version": "1.0.0",
+  "description": "Desktop app to publish to many social media accounts at once, with isolated Chromium sessions per account.",
+  "author": "leaperone",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs && electron .",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist:win": "node build.mjs && electron-builder --win --x64 --publish never",
+    "dist:linux": "node build.mjs && electron-builder --linux dir --publish never",
+    "e2e": "node build.mjs && node test/build-e2e.mjs && node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.251",
+    "@types/node": "^22.20.4",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@types/turndown": "^5.0.6",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "lucide-react": "^1.49.0",
+    "marked": "^18.0.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "turndown": "^7.2.4",
+    "typescript": "5.9"
+  },
+  "build": {
+    "appId": "com.leaperone.multipost.desktop",
+    "productName": "MultiPost Desktop",
+    "executableName": "MultiPost",
+    "copyright": "Copyright \u00a9 leaperone",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": ["dist/**/*", "!dist/e2e-main.js", "package.json"],
+    "asar": true,
+    "electronLanguages": ["en-US", "zh-CN"],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "MultiPost-Desktop-${version}-win-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MultiPost Desktop",
+      "artifactName": "MultiPost-Desktop-Setup-${version}-x64.${ext}"
+    },
+    "portable": {
+      "artifactName": "MultiPost-Desktop-${version}-x64-portable.${ext}"
+    },
+    "linux": {
+      "target": ["dir"],
+      "icon": "build/icon.png",
+      "category": "Utility"
+    },
+    "publish": null
+  }
+}

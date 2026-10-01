@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 247 248 250;
+  --surface: 255 255 255;
+  --elevated: 241 243 246;
+  --fg: 17 20 27;
+  --muted: 100 108 122;
+  --border: 226 229 235;
+  --primary-50: 238 242 255;
+  --primary-100: 224 231 255;
+  --primary-500: 99 102 241;
+  --primary-600: 79 70 229;
+  --primary-700: 67 56 202;
+  --success: 16 163 110;
+  --warning: 217 140 6;
+  --danger: 220 52 69;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 11 13 18;
+    --surface: 19 22 29;
+    --elevated: 27 31 40;
+    --fg: 233 236 242;
+    --muted: 140 148 163;
+    --border: 40 45 56;
+    --primary-50: 30 30 60;
+    --primary-100: 40 40 85;
+    --primary-500: 129 140 248;
+    --primary-600: 99 102 241;
+    --primary-700: 79 70 229;
+    --success: 52 199 140;
+    --warning: 240 170 50;
+    --danger: 245 90 105;
+    color-scheme: dark;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-background text-foreground font-sans antialiased;
+  font-size: 13.5px;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--border));
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--muted) / 0.5);
+}
+
+.field {
+  @apply w-full rounded-lg border border-border bg-surface px-3 py-2 text-foreground outline-none transition placeholder:text-muted/70 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20;
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-spin-slow {
+  animation: spin-slow 1.4s linear infinite;
+}

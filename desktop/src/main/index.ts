@@ -1,0 +1,392 @@
+import "./i18n-shim";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { BrowserWindow, Menu, app, dialog, ipcMain, nativeTheme, session, shell } from "electron";
+import {
+  type Account,
+  type AppState,
+  GROUP_COLORS,
+  type Group,
+  type LocalFile,
+  type PublishRequest,
+  type Settings,
+} from "../shared/types";
+import { closeLoginWindow, detectAccount, openLoginWindow } from "./accounts";
+import { currentLocale } from "./i18n-shim";
+import { listPlatforms, listSites } from "./platforms";
+import { activeJobCount, canRetry, cancelJob, retryJob, showJobWindow, startPublish } from "./publisher";
+import {
+  cleanUserAgent,
+  clearAccountSession,
+  getProxyCredentials,
+  registerSchemes,
+  scheduleRemovePartitionDir,
+} from "./sessions";
+import { flush, getState, loadState, onChange, replaceState, update } from "./store";
+
+registerSchemes();
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
+let mainWindow: BrowserWindow | null = null;
+
+const MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".heic": "image/heic",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".m4v": "video/x-m4v",
+  ".webm": "video/webm",
+  ".mkv": "video/x-matroska",
+  ".avi": "video/x-msvideo",
+  ".flv": "video/x-flv",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
+  ".aac": "audio/aac",
+  ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+};
+
+function toLocalFile(filePath: string): LocalFile | null {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    return {
+      path: filePath,
+      name: path.basename(filePath),
+      size: stat.size,
+      type: MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function createMainWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1360,
+    height: 880,
+    minWidth: 980,
+    minHeight: 640,
+    title: "MultiPost Desktop",
+    icon: path.join(__dirname, "icon.png"),
+    show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0b0d12" : "#f7f8fa",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "app-preload.js"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  });
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (e) => e.preventDefault());
+  mainWindow.on("close", (e) => {
+    const pending = activeJobCount();
+    if (pending > 0) {
+      const choice = dialog.showMessageBoxSync(mainWindow!, {
+        type: "warning",
+        buttons: ["Keep running", "Quit anyway"],
+        defaultId: 0,
+        cancelId: 0,
+        message: `${pending} publish job(s) are still running.`,
+        detail: "Quitting now closes their windows before they finish.",
+      });
+      if (choice === 0) {
+        e.preventDefault();
+        return;
+      }
+    }
+    app.quit();
+  });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+}
+
+// Push state to the UI, coalescing bursts of updates into one message per frame.
+let pushTimer: NodeJS.Timeout | null = null;
+onChange(() => {
+  if (pushTimer) return;
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    mainWindow?.webContents.send("state", getState());
+  }, 16);
+});
+
+function sanitizeAccountPatch(patch: Partial<Account>): Partial<Account> {
+  const allowed: (keyof Account)[] = ["label", "proxy", "userAgent", "extraConfig", "notes"];
+  const out: Partial<Account> = {};
+  for (const key of allowed) if (key in patch) (out as Record<string, unknown>)[key] = patch[key];
+  if (typeof out.label === "string") out.label = out.label.trim().slice(0, 80) || "Account";
+  return out;
+}
+
+function registerIpc() {
+  ipcMain.handle("app:init", () => ({
+    state: getState(),
+    platforms: listPlatforms(),
+    sites: listSites(),
+    version: app.getVersion(),
+    locale: currentLocale,
+    platform: process.platform,
+  }));
+
+  // Groups
+  ipcMain.handle("group:create", (_e, name: string) => {
+    const group: Group = {
+      id: crypto.randomUUID(),
+      name: name.trim().slice(0, 60) || "Group",
+      color: GROUP_COLORS[getState().groups.length % GROUP_COLORS.length],
+      accountIds: [],
+      createdAt: Date.now(),
+    };
+    update((s) => s.groups.push(group));
+    return group;
+  });
+  ipcMain.handle("group:update", (_e, id: string, patch: Partial<Pick<Group, "name" | "color" | "accountIds">>) => {
+    update((s) => {
+      const g = s.groups.find((x) => x.id === id);
+      if (!g) return;
+      if (typeof patch.name === "string") g.name = patch.name.trim().slice(0, 60) || g.name;
+      if (typeof patch.color === "string") g.color = patch.color;
+      if (Array.isArray(patch.accountIds)) {
+        const valid = new Set(s.accounts.map((a) => a.id));
+        g.accountIds = [...new Set(patch.accountIds)].filter((x) => valid.has(x));
+      }
+    });
+  });
+  ipcMain.handle("group:delete", (_e, id: string) => {
+    update((s) => {
+      s.groups = s.groups.filter((g) => g.id !== id);
+    });
+  });
+  ipcMain.handle("group:reorder", (_e, ids: string[]) => {
+    update((s) => {
+      const order = new Map(ids.map((id, i) => [id, i]));
+      s.groups.sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
+    });
+  });
+
+  // Accounts
+  ipcMain.handle(
+    "account:create",
+    (_e, input: { accountKey: string; label: string; proxy?: string; groupIds?: string[] }) => {
+      if (!listSites().some((s) => s.accountKey === input.accountKey)) throw new Error("Unknown site");
+      const id = crypto.randomUUID();
+      const account: Account = {
+        id,
+        accountKey: input.accountKey,
+        label: input.label?.trim().slice(0, 80) || "Account",
+        partition: `persist:acc-${id}`,
+        proxy: input.proxy?.trim() || undefined,
+        status: "unknown",
+        createdAt: Date.now(),
+      };
+      update((s) => {
+        s.accounts.push(account);
+        for (const g of s.groups) if (input.groupIds?.includes(g.id)) g.accountIds.push(id);
+      });
+      return account;
+    },
+  );
+  ipcMain.handle("account:update", (_e, id: string, patch: Partial<Account>) => {
+    update((s) => {
+      const a = s.accounts.find((x) => x.id === id);
+      if (a) Object.assign(a, sanitizeAccountPatch(patch));
+    });
+  });
+  ipcMain.handle("account:setGroups", (_e, id: string, groupIds: string[]) => {
+    update((s) => {
+      for (const g of s.groups) {
+        const has = g.accountIds.includes(id);
+        const want = groupIds.includes(g.id);
+        if (want && !has) g.accountIds.push(id);
+        if (!want && has) g.accountIds = g.accountIds.filter((x) => x !== id);
+      }
+    });
+  });
+  ipcMain.handle("account:delete", async (_e, id: string) => {
+    const account = getState().accounts.find((a) => a.id === id);
+    if (!account) return;
+    closeLoginWindow(id);
+    await clearAccountSession(account).catch(() => {});
+    update((s) => {
+      s.accounts = s.accounts.filter((a) => a.id !== id);
+      for (const g of s.groups) g.accountIds = g.accountIds.filter((x) => x !== id);
+    });
+    scheduleRemovePartitionDir(account);
+  });
+  ipcMain.handle("account:login", (_e, id: string) => openLoginWindow(id));
+  ipcMain.handle("account:detect", (_e, id: string) => detectAccount(id));
+  ipcMain.handle("account:detectAll", async () => {
+    const ids = getState().accounts.map((a) => a.id);
+    // A few at a time: each check spins up a hidden page.
+    for (let i = 0; i < ids.length; i += 3) {
+      await Promise.all(ids.slice(i, i + 3).map((id) => detectAccount(id).catch(() => null)));
+    }
+  });
+  ipcMain.handle("account:signOut", async (_e, id: string) => {
+    const account = getState().accounts.find((a) => a.id === id);
+    if (!account) return;
+    closeLoginWindow(id);
+    await clearAccountSession(account);
+    update((s) => {
+      const a = s.accounts.find((x) => x.id === id);
+      if (a) {
+        a.status = "logged-out";
+        a.profile = undefined;
+      }
+    });
+  });
+
+  // Files
+  ipcMain.handle("files:pick", async (_e, kind: "image" | "video" | "audio" | "any", multiple: boolean) => {
+    const filters: Record<string, Electron.FileFilter[]> = {
+      image: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
+      video: [{ name: "Videos", extensions: ["mp4", "mov", "m4v", "webm", "mkv", "avi", "flv"] }],
+      audio: [{ name: "Audio", extensions: ["mp3", "m4a", "wav", "aac", "ogg", "flac"] }],
+      any: [],
+    };
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
+      filters: filters[kind],
+    });
+    if (result.canceled) return [];
+    return result.filePaths.map(toLocalFile).filter(Boolean);
+  });
+  ipcMain.handle("files:fromPaths", (_e, paths: string[]) => paths.map(toLocalFile).filter(Boolean));
+
+  // Publishing
+  ipcMain.handle("publish:start", (_e, request: PublishRequest) => startPublish(request));
+  ipcMain.handle("job:retry", (_e, id: string) => retryJob(id));
+  ipcMain.handle("job:cancel", (_e, id: string) => cancelJob(id));
+  ipcMain.handle("job:show", (_e, id: string) => showJobWindow(id));
+  ipcMain.handle("job:canRetry", (_e, ids: string[]) => ids.filter((id) => canRetry(id)));
+  ipcMain.handle("history:clear", () => {
+    update((s) => {
+      const running = new Set(
+        s.jobs
+          .filter((j) => j.status === "queued" || j.status === "loading" || j.status === "injecting")
+          .map((j) => j.runId),
+      );
+      s.runs = s.runs.filter((r) => running.has(r.id));
+      const keep = new Set(s.runs.flatMap((r) => r.jobIds));
+      s.jobs = s.jobs.filter((j) => keep.has(j.id));
+    });
+  });
+
+  // Settings & data
+  ipcMain.handle("settings:update", (_e, patch: Partial<Settings>) => {
+    update((s) => {
+      const next = { ...s.settings, ...patch };
+      next.concurrency = Math.min(10, Math.max(1, Math.round(Number(next.concurrency) || 1)));
+      next.pageTimeoutSec = Math.min(300, Math.max(10, Math.round(Number(next.pageTimeoutSec) || 60)));
+      s.settings = next;
+    });
+    if (patch.theme) nativeTheme.themeSource = patch.theme;
+  });
+  ipcMain.handle("data:export", async () => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: `multipost-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePath) return false;
+    const { groups, accounts, settings } = getState();
+    fs.writeFileSync(
+      result.filePath,
+      JSON.stringify({ format: "multipost-desktop", version: 1, groups, accounts, settings }, null, 2),
+    );
+    return true;
+  });
+  ipcMain.handle("data:import", async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      filters: [{ name: "JSON", extensions: ["json"] }],
+      properties: ["openFile"],
+    });
+    if (result.canceled || !result.filePaths[0]) return false;
+    const parsed = JSON.parse(fs.readFileSync(result.filePaths[0], "utf8")) as Partial<AppState> & { format?: string };
+    if (parsed.format !== "multipost-desktop" || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.groups)) {
+      throw new Error("This file is not a MultiPost Desktop backup");
+    }
+    const current = getState();
+    // Merge: imported accounts keep their ids/partitions, so sessions on this machine are reused if present.
+    const accounts = [
+      ...current.accounts.filter((a) => !parsed.accounts!.some((b) => b.id === a.id)),
+      ...parsed.accounts,
+    ];
+    const groups = [...current.groups.filter((g) => !parsed.groups!.some((b) => b.id === g.id)), ...parsed.groups];
+    replaceState({ ...current, accounts, groups, settings: { ...current.settings, ...(parsed.settings ?? {}) } });
+    return true;
+  });
+  ipcMain.handle("data:openFolder", () => shell.openPath(app.getPath("userData")));
+  ipcMain.handle("app:relaunch", () => {
+    flush();
+    app.relaunch();
+    app.exit(0);
+  });
+  ipcMain.handle("app:openExternal", (_e, url: string) => {
+    if (/^https?:\/\//.test(url)) return shell.openExternal(url);
+  });
+}
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
+// Proxy authentication for accounts configured with user:pass proxies.
+app.on("login", (event, webContents, _details, authInfo, callback) => {
+  if (!authInfo.isProxy || !webContents) return;
+  const creds = getProxyCredentials(webContents.session);
+  if (creds) {
+    event.preventDefault();
+    callback(creds.username, creds.password);
+  }
+});
+
+app.whenReady().then(() => {
+  // Default UA for every session, then each account session sets its own (see sessions.ts).
+  app.userAgentFallback = cleanUserAgent(app.userAgentFallback);
+  session.defaultSession.setUserAgent(cleanUserAgent(session.defaultSession.getUserAgent()));
+  loadState();
+  nativeTheme.themeSource = getState().settings.theme;
+  if (process.platform !== "darwin") Menu.setApplicationMenu(null);
+  app.setAppUserModelId("com.leaperone.multipost.desktop");
+  registerIpc();
+  createMainWindow();
+});
+
+app.on("before-quit", () => {
+  try {
+    flush();
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+app.on("window-all-closed", () => {
+  app.quit();
+});
+
+app.on("activate", () => {
+  if (!mainWindow) createMainWindow();
+});
