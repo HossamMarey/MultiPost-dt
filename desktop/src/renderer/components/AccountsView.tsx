@@ -509,6 +509,12 @@ function AddAccountModal({ defaultGroupId, onClose }: { defaultGroupId?: string;
     );
   }, [init.sites, query, region, type]);
 
+  const addedBySite = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of state.accounts) m.set(a.accountKey, (m.get(a.accountKey) ?? 0) + 1);
+    return m;
+  }, [state.accounts]);
+
   const chip = (active: boolean) =>
     cx(
       "h-7 rounded-full border px-3 text-xs font-medium transition",
@@ -585,10 +591,15 @@ function AddAccountModal({ defaultGroupId, onClose }: { defaultGroupId?: string;
                 key={s.accountKey}
                 type="button"
                 onClick={() => setSite(s)}
-                className="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface px-2 py-3.5 text-center transition hover:border-primary-500 hover:bg-primary-50/40 focus-visible:border-primary-500 focus-visible:outline-none">
+                className="relative flex flex-col items-center gap-2 rounded-xl border border-border bg-surface px-2 py-3.5 text-center transition hover:border-primary-500 hover:bg-primary-50/40 focus-visible:border-primary-500 focus-visible:outline-none">
                 <Favicon siteKey={s.accountKey} src={s.faviconUrl} label={s.label} size={36} />
                 <span className="w-full truncate font-medium">{s.label}</span>
                 <span className="flex flex-wrap justify-center gap-1">{typeChips(s)}</span>
+                {addedBySite.get(s.accountKey) ? (
+                  <span className="absolute right-2 top-2 rounded-full bg-success/10 px-1.5 text-[10px] font-medium text-success">
+                    {t("addedCount", { n: addedBySite.get(s.accountKey) ?? 0 })}
+                  </span>
+                ) : null}
               </button>
             ))}
             {sites.length === 0 && <p className="col-span-4 py-8 text-center text-muted">{t("noSitesMatch")}</p>}

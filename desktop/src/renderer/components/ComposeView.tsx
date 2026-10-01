@@ -573,6 +573,16 @@ function TargetsPanel({
         ),
     [state.accounts, draft.contentType, platformsFor, sitesByKey],
   );
+  const [filter, setFilter] = useState("");
+  const visibleRows = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) =>
+      [r.account.label, r.account.profile?.username, sitesByKey.get(r.account.accountKey)?.label].some((v) =>
+        v?.toLowerCase().includes(q),
+      ),
+    );
+  }, [rows, filter, sitesByKey]);
 
   const allKeys = useMemo(() => rows.flatMap((r) => r.platforms.map((p) => `${r.account.id}:${p.name}`)), [rows]);
   const valid = new Set(allKeys);
@@ -641,7 +651,8 @@ function TargetsPanel({
       </div>
 
       {state.groups.length > 0 && rows.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pb-3">
+        <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
+          <span className="w-full text-[11px] font-medium uppercase tracking-wide text-muted">{t("selectGroup")}</span>
           {state.groups.map((g) => {
             const keys = keysForAccounts(g.accountIds);
             if (!keys.length) return null;
@@ -674,6 +685,16 @@ function TargetsPanel({
         </div>
       )}
 
+      {rows.length > 6 && (
+        <div className="border-t border-border px-4 py-2">
+          <input
+            className="field h-8 py-0 text-xs"
+            placeholder={t("search")}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto border-t border-border">
         {rows.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-6 py-12 text-center text-muted">
@@ -685,7 +706,7 @@ function TargetsPanel({
           </div>
         ) : (
           <ul className="flex flex-col py-1">
-            {rows.map(({ account, platforms }) => {
+            {visibleRows.map(({ account, platforms }) => {
               const site = sitesByKey.get(account.accountKey);
               const keys = platforms.map((p) => `${account.id}:${p.name}`);
               const on = keys.every((k) => selectedSet.has(k));
