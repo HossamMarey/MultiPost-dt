@@ -1,59 +1,163 @@
 <div align="center">
-<img src="https://github.com/user-attachments/assets/b30c6c81-9c8b-4c78-a2df-9266b84b6f14" width="200" height="200" alt="MultiPost Logo" />
+<img src="desktop/build/icon.png" width="160" height="160" alt="MultiPost logo" />
 
 # MultiPost
 
-![GitHub License GitHub许可证](https://img.shields.io/github/license/leaper-one/MultiPost-Extension) ![GitHub Repo stars GitHub星星](https://img.shields.io/github/stars/leaper-one/MultiPost-Extension) ![GitHub commit activity GitHub提交活动](https://img.shields.io/github/commit-activity/m/leaper-one/MultiPost-Extension) [![Website 网站](https://img.shields.io/website?url=https%3A%2F%2Fmultipost.app)](https://multipost.app) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leaperone/MultiPost-Extension)
+**Write once, publish everywhere.**
+Publish posts, articles, videos and podcasts to 30+ social media platforms in one click, from a Windows desktop app or a browser extension.
 
-[English](README.md) | [中文](docs/README-zh.md) | [日本語](docs/README-jp.md) | [Français](docs/README-fr.md) | [한국어](docs/README-kr.md)
+[Download for Windows](https://github.com/HossamMarey/MultiPost-dt/releases/latest) · [Desktop app guide](desktop/README.md) · [Report an issue](https://github.com/HossamMarey/MultiPost-dt/issues)
 
-> A browser extension that helps users publish content to multiple social media platforms with one click.
-> 一个用于在多个社交平台上发布内容的浏览器扩展。
-
-⭐ If you find this project helpful, please consider giving it a star! Your support helps us grow and improve! ⭐
 </div>
 
-## Open-source snapshot / 开源部分
+---
 
-This repository contains the Apache-2.0 open-source components of the MultiPost extension. The MultiPost monorepo builds and publishes the official Chrome and Edge packages, which also include the proprietary Agent module. This repository maintains source code only and does not run release workflows.
+## What is MultiPost?
 
-本仓库维护 MultiPost 扩展的 Apache-2.0 开源部分。Chrome 和 Edge 商店中的 MultiPost 扩展由主仓库构建和发布，包含未在本仓库公开的 Agent 模块。本仓库只维护源码，不运行发布流水线。
+MultiPost publishes content to many social platforms at once. You write your content once and choose where it goes. MultiPost then opens each platform's own publish page, fills in the title, text, tags and media, and can press the publish button for you.
 
-## 主要功能 / Key Features
-- 一键发布内容（文本、图片、视频等）到多个平台。（支持知乎、微博、小红书、抖音等10多个主流平台）无需登录、无需注册、无需API Key。完全免费！
-  Post your content (text, images, videos, etc.) to multiple platforms with one click. (Over 10 mainstream platforms including TikTok, YouTube Zhihu, Weibo, Xiaohongshu, TikTok, etc.) No login, no registration, no API Key required. Free!
-- 两种API接口 / 2 types of API Interface:
-  - 扩展API：在您自己的Web应用中调用扩展的API发布内容。
-    Extension API: Calling the extension's API to publish content in your own web app.
-  - RESTful API：在脚本或服务器中调用RESTful API发布内容。
-    RESTful API: Calling the RESTful API to publish content in your script or server.
+It doesn't use platform APIs or API keys and doesn't need its own account. It works through your normal signed-in sessions, so anything you can post by hand, MultiPost can post for you.
 
-该扩展解决了内容创作者在多平台发布时的痛点。通过一次编辑，内容可以同步到所有平台，大大提高工作效率。
-This extension solves the pain points of content creators when publishing across multiple platforms. Through a single edit, content can be synchronized to all platforms, greatly improving work efficiency.
+This repository contains two apps that share the same platform integrations:
 
-## How to start
-- [multipost.app](https://multipost.app) - Official website
-- [Documentation | 文档](https://docs.multipost.app)
-- [Developer Documentation | 开发者文档](https://multipost.app/docs/development)
-- [MultiPost Article Editor](https://md.multipost.app/) - [(Repo)](https://github.com/leaperone/multipost-wechat-markdown-editor) - Online editor for creating and publishing content to multiple platforms.
-- [Chrome extension - ![Chrome Web Store Version Chrome网上商店版本](https://img.shields.io/chrome-web-store/v/dhohkaclnjgcikfoaacfgijgjgceofih)](https://chromewebstore.google.com/detail/multipost/dhohkaclnjgcikfoaacfgijgjgceofih) ![Chrome Web Store Users Chrome网上商店用户](https://img.shields.io/chrome-web-store/users/dhohkaclnjgcikfoaacfgijgjgceofih) ![Chrome Web Store Last Updated](https://img.shields.io/chrome-web-store/last-updated/dhohkaclnjgcikfoaacfgijgjgceofih)
-- [Edge extension - ![](https://img.shields.io/badge/dynamic/json?label=edge%20add-on&prefix=v&query=%24.version&url=https%3A%2F%2Fmicrosoftedge.microsoft.com%2Faddons%2Fgetproductdetailsbycrxid%2Fckoiphiceimehjkolnfffgbmihoppgjg)](https://microsoftedge.microsoft.com/addons/detail/multipost/ckoiphiceimehjkolnfffgbmihoppgjg) [![](https://img.shields.io/badge/dynamic/json?label=users&query=%24.activeInstallCount&url=https%3A%2F%2Fmicrosoftedge.microsoft.com%2Faddons%2Fgetproductdetailsbycrxid%2Fckoiphiceimehjkolnfffgbmihoppgjg)](https://microsoftedge.microsoft.com/addons/detail/multipost/ckoiphiceimehjkolnfffgbmihoppgjg)
-<!-- ![Edge add-on last updated](https://img.shields.io/badge/dynamic/json?label=last%20updated&query=%24.lastUpdateDate&url=https%3A%2F%2Fmicrosoftedge.microsoft.com%2Faddons%2Fgetproductdetailsbycrxid%2Fckoiphiceimehjkolnfffgbmihoppgjg) -->
+| | **MultiPost Desktop** | **MultiPost Browser Extension** |
+| --- | --- | --- |
+| Runs on | Windows 10/11 (64-bit) | Chrome, Edge and other Chromium browsers |
+| Accounts | **Many accounts per platform**, each in its own isolated browser profile | The one account you're signed in to in your browser |
+| Best for | Agencies, teams and creators who run several accounts | Individual creators who post from their own browser |
+| Source | [`desktop/`](desktop/) | [`src/`](src/) |
 
-## Star History
+## Features
 
-[![Star History Chart](https://api.star-history.com/svg?repos=leaperone/multipost-wechat-markdown-editor,leaperone/MultiPost-Extension&type=Date)](https://www.star-history.com/#leaperone/multipost-wechat-markdown-editor&leaperone/MultiPost-Extension&Date)
+- **One composer, four content types:** short posts (text plus images or videos), long-form articles (Markdown/HTML), videos and podcasts.
+- **30+ platforms**, including X (Twitter), Instagram, Facebook, Threads, LinkedIn, Reddit, Pinterest, Bluesky, YouTube, TikTok, Substack, Bilibili, Douyin, Kuaishou, Weibo, Xiaohongshu (RedNote), Zhihu, WeChat Channels, Toutiao, Juejin, Douban and more.
+- **Auto-submit or review:** let MultiPost press "Publish" on every platform, or leave each page filled in so you can review it and publish yourself.
+- **Local only:** your content, accounts and sign-ins stay on your computer.
 
-## Contact Us
-- [Discord](https://discord.gg/GNsCX9zFwQ)
-- 微信群
-  - 微信扫一扫加入 MultiPost 微信群
-    <img src="docs/multipost-wechat-group.jpg" width="350" alt="MultiPost WeChat Group QR Code" />
-- [点击加入腾讯频道【MultiPost】](https://pd.qq.com/s/ajj47bgjb) ，频道号：multipostapp
-- Email: [support@undersky.ai](mailto:support@undersky.ai)（UnderSky / Agent 模型账户；MultiPost 扩展问题请用 GitHub Issues）
-- [GitHub Issues](https://github.com/leaperone/MultiPost-Extension/issues)
-- 腾讯频道
-  - 微信扫一扫
-    <img src="https://github.com/user-attachments/assets/1044058f-036e-4942-af07-e4bd48a1e1d6" width="350" alt="MultiPost Tencent Channel Wechat" />
-  - QQ 扫一扫
-    <img src="https://github.com/user-attachments/assets/fc9edf3b-1ed5-4aa7-99f9-b39dcab3f449" width="350" alt="MultiPost Tencent Channel QQ" />
+The desktop app also offers:
+
+- **Unlimited accounts.** Each account has its own browser profile, so cookies and logins never mix. You can run ten X accounts next to ten Bilibili accounts.
+- **Account groups.** Group accounts (for example "International" or "Launch day") and select a whole group with one click.
+- **Different text per platform or per account,** plus placeholders (`{account}`, `{site}`, `{date}`, `{time}`) and automatic footers and hashtags for each group.
+- **Live limit checks** while you type: character counts, title lengths, tag limits, image counts, video length and aspect ratio.
+- **Confirmed results.** The app shows each target as Published (with a **View post** link), Rejected (with the platform's reason) or Not confirmed. Failed targets can be retried.
+- **Pre-publish check.** Before you publish, the app checks that each account is signed in and that its publish page loads.
+- **A proxy, timezone and language for each account,** with Chrome-like browser identity.
+- **Optional AI rewrite** with Claude, which adapts your post to each platform's style and limits. It needs your own Anthropic API key.
+
+---
+
+## Installation
+
+### Option A: Desktop app (Windows)
+
+1. Go to the [**Releases**](https://github.com/HossamMarey/MultiPost-dt/releases/latest) page.
+2. Download one of these files:
+
+   | File | Use |
+   | --- | --- |
+   | `MultiPost-Desktop-Setup-<version>-x64.exe` | Installer (**recommended**) |
+   | `MultiPost-Desktop-<version>-x64-portable.exe` | Portable, runs without installing |
+   | `MultiPost-Desktop-<version>-win-x64.zip` | Unpacked app |
+
+3. Run the installer. If Windows SmartScreen warns you about an unsigned app, click **More info → Run anyway**.
+
+The app stores its data in `%APPDATA%\MultiPost Desktop`.
+
+### Option B: Browser extension
+
+**From the store (easiest):**
+
+- [Chrome Web Store](https://chromewebstore.google.com/detail/multipost/dhohkaclnjgcikfoaacfgijgjgceofih)
+- [Microsoft Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/multipost/ckoiphiceimehjkolnfffgbmihoppgjg)
+
+**From source:**
+
+Requirements: [Node.js](https://nodejs.org/) 20+ and [pnpm](https://pnpm.io/).
+
+```bash
+git clone https://github.com/HossamMarey/MultiPost-dt.git
+cd MultiPost-dt
+pnpm install
+pnpm build            # production build in build/chrome-mv3-prod
+```
+
+Then load the build into your browser:
+
+1. Open `chrome://extensions` (or `edge://extensions`).
+2. Turn on **Developer mode**.
+3. Click **Load unpacked** and select the `build/chrome-mv3-prod` folder.
+
+---
+
+## How to use
+
+### Desktop app
+
+1. **Add your accounts.** Open **Accounts → Add account**, pick a platform, give the account a name, and optionally add it to groups or set a proxy. A browser window opens. Sign in there, then close it. Repeat for every account.
+2. **Check sign-in status.** Click **Check sign-in status** to confirm your logins, on platforms that support automatic checks.
+3. **Compose.** Open **Compose**, choose a content type (Post, Article, Video or Podcast), write your content and attach media (drag and drop works). If you want, override the text for a specific platform or account and look at the preview.
+4. **Pick targets and publish.** On the right, select accounts or whole groups. Turn **Auto-submit** on or off, then click **Publish**.
+5. **Track results.** Open **Activity** to follow each target live. Use **Show** to bring a publish window to the front, and **Retry** for anything that failed.
+
+In **Settings** you can change how many pages publish at once, page timeouts, window visibility, the language (English / 简体中文) and the theme, add an Anthropic API key for AI rewrite, and export or import a backup. A backup holds your accounts and groups but not your sign-ins.
+
+See the [desktop app guide](desktop/README.md) for more detail.
+
+### Browser extension
+
+1. **Sign in** to the platforms you want to post on, in the same browser.
+2. Click the **MultiPost** icon in the toolbar to open the publisher.
+3. **Write your content.** Choose the content type, then enter a title, text, images or video.
+4. **Select platforms** from the list. Run **Refresh accounts** to see which platforms you're signed in to.
+5. Click **Publish**. MultiPost opens a tab for each platform and fills it in. With auto-publish on, it also submits each post. With auto-publish off, review each tab and publish it yourself.
+
+Web apps and scripts can also send content to the extension through its messaging API. See [docs.multipost.app](https://docs.multipost.app) for details.
+
+---
+
+## Development
+
+```bash
+# Browser extension (repository root)
+pnpm install
+pnpm dev              # dev build with hot reload, in build/chrome-mv3-dev
+pnpm lint             # Biome lint
+
+# Desktop app
+cd desktop
+npm ci
+npm run dev           # build and launch the Electron app
+npm run typecheck
+npm run test:unit
+npm run dist:win      # Windows installer, portable exe and zip, in desktop/release/
+```
+
+### Project structure
+
+```
+src/
+  sync/          Platform integrations (shared by the extension and the desktop app)
+    dynamic/     Short posts      article/  Long-form articles
+    video/       Videos           podcast/  Audio
+    account/     Sign-in detection for each platform
+  background/    Extension service worker (message routing, tabs)
+  popup/ sidepanel/ tabs/ options/   Extension UI
+desktop/
+  src/main/      Electron main process (sessions, publisher, verifier)
+  src/renderer/  Desktop UI (React and Tailwind)
+locales/         Translations
+```
+
+**Adding a platform:** create an inject function under `src/sync/<type>/` and register it in the matching map (`DynamicInfoMap`, `ArticleInfoMap`, `VideoInfoMap` or `PodcastInfoMap`). Both the extension and the desktop app pick it up automatically. See [`CLAUDE.md`](CLAUDE.md) for the full checklist.
+
+### Releasing the desktop app
+
+Push a tag such as `desktop-v1.2.0`, or run **Actions → Desktop (Windows x64) → Run workflow**. GitHub Actions then tests, builds and publishes a release. See [`desktop/README.md`](desktop/README.md#releases) for code-signing setup.
+
+---
+
+## Credits and license
+
+MultiPost builds on the open-source [MultiPost Extension](https://github.com/leaperone/MultiPost-Extension) by leaperone.
+It is licensed under the [Apache License 2.0](LICENSE).
