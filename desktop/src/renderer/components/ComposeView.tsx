@@ -910,9 +910,15 @@ function TargetsPanel({
           </Button>
         )}
         {errorTargets > 0 && (
-          <div className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">
-            {t("targetsWithErrors", { n: errorTargets })}
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const first = resolved.find((r) => r.issues.some((i) => i.level === "error"));
+              if (first) onOpenPlatform(first.platform.name);
+            }}
+            className="rounded-lg bg-danger/10 px-3 py-2 text-left text-xs text-danger hover:bg-danger/15">
+            {t("targetsWithErrors", { n: errorTargets })} →
+          </button>
         )}
         {notSignedIn > 0 && (
           <div className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">

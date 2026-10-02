@@ -245,7 +245,6 @@ function GroupSettingsModal({ group, onClose }: { group: Group; onClose: () => v
 }
 
 function GroupHeader({ group }: { group: Group }) {
-  const { setView } = useApp();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { toast } = useFeedback();
   const [editing, setEditing] = useState(false);
