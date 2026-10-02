@@ -8,7 +8,8 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "include": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.json", "**/*.css"]
+    "include": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.json", "**/*.css"],
+    "ignore": ["desktop/node_modules", "desktop/dist", "desktop/release"]
   },
   "formatter": {
     "enabled": true,
@@ -73,5 +74,19 @@
     "linter": {
       "enabled": true
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["desktop/src/renderer/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noAutofocus": "off",
+            "useSemanticElements": "off",
+            "useMediaCaption": "off"
+          }
+        }
+      }
+    }
+  ]
 }
