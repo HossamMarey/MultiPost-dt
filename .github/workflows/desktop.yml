@@ -70,23 +70,23 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run build
-      - name: Configure code signing (optional)
-        shell: pwsh
+      # Optional Authenticode signing, only for release builds (tags and manual release runs).
+      # Repository secrets: WIN_CSC_LINK = base64 of your .pfx (single line), WIN_CSC_KEY_PASSWORD = its password.
+      - name: Build installer, portable and zip
         env:
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ (startsWith(github.ref, 'refs/tags/desktop-v') || github.event_name == 'workflow_dispatch') && secrets.WIN_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ (startsWith(github.ref, 'refs/tags/desktop-v') || github.event_name == 'workflow_dispatch') && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+        shell: pwsh
         run: |
-          # Add repository secrets WIN_CSC_LINK (base64 of your .pfx code-signing certificate) and
-          # WIN_CSC_KEY_PASSWORD to sign the installer, portable exe and updates. Without them builds are unsigned.
-          if ($env:WIN_CSC_LINK) {
-            "CSC_LINK=$env:WIN_CSC_LINK" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            "CSC_KEY_PASSWORD=$env:WIN_CSC_KEY_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            "CSC_IDENTITY_AUTO_DISCOVERY=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            Write-Output "Code signing enabled"
+          if ($env:CSC_LINK) {
+            $env:CSC_LINK = ($env:CSC_LINK -replace '\s', '')   # tolerate wrapped base64
+            $env:CSC_IDENTITY_AUTO_DISCOVERY = "true"
+            Write-Output "Signing this build"
           } else {
-            Write-Output "No signing certificate configured: building unsigned"
+            Remove-Item Env:CSC_LINK, Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+            Write-Output "Building unsigned"
           }
-      - run: npx electron-builder --win --x64 --publish never
+          npx electron-builder --win --x64 --publish never
       - name: Collect artifacts
         shell: pwsh
         run: |
@@ -127,6 +127,6 @@ jobs:
             - `MultiPost-Desktop-*-x64-portable.exe`: portable, no install
             - `MultiPost-Desktop-*-win-x64.zip`: unpacked app
 
-            The app is not code-signed yet. Windows SmartScreen may warn on first launch: choose "More info" → "Run anyway".
+            If this build isn't code-signed, Windows SmartScreen may warn on first launch: choose "More info" → "Run anyway".
           files: artifacts/*
           fail_on_unmatched_files: true

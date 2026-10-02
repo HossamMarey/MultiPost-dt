@@ -203,9 +203,10 @@ function AiKeyRow({ current, onSave }: { current?: string; onSave: (key: string)
           placeholder={t("aiKeyPlaceholder")}
           value={value}
           onFocus={() => value === current && current && setValue("")}
+          onBlur={() => !value.trim() && setValue(current ?? "")}
           onChange={(e) => setValue(e.target.value)}
         />
-        <Button variant="primary" disabled={!dirty} onClick={() => onSave(value)}>
+        <Button variant="primary" disabled={!dirty || !value.trim()} onClick={() => onSave(value)}>
           {t("save")}
         </Button>
         {current && <Button onClick={() => onSave("")}>{t("remove")}</Button>}

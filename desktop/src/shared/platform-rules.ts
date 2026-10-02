@@ -5,6 +5,10 @@
 import type { ContentType, LocalFile } from "./types";
 
 export interface PlatformRules {
+  /** How the platform counts text: people-visible characters (default), X's weighted count, or UTF-8 bytes. */
+  textCount?: "graphemes" | "x-weighted" | "bytes";
+  /** Limits the platform enforces for every account (errors). Others are warnings (e.g. X Premium allows more). */
+  strict?: boolean;
   titleMax?: number;
   titleRequired?: boolean;
   textMax?: number; // body text (for X etc. the whole post)
@@ -23,16 +27,38 @@ export interface PlatformRules {
 
 /** Rules per platform name (see the extension's InfoMaps). */
 export const PLATFORM_RULES: Record<string, PlatformRules> = {
-  DYNAMIC_X: { textMax: 280, countTitleInText: true, tagsInText: true, imagesMax: 4, videoMaxSec: 140 },
-  DYNAMIC_THREADS: { textMax: 500, countTitleInText: true, tagsInText: true, imagesMax: 20, videoMaxSec: 300 },
-  DYNAMIC_BLUESKY: { textMax: 300, countTitleInText: true, tagsInText: true, imagesMax: 4, videoMaxSec: 180 },
-  VIDEO_BLUESKY: { textMax: 300, countTitleInText: true, tagsInText: true, videoMaxSec: 180 },
+  DYNAMIC_X: {
+    textMax: 280,
+    textCount: "x-weighted",
+    countTitleInText: true,
+    tagsInText: true,
+    imagesMax: 4,
+    videoMaxSec: 140,
+  },
+  DYNAMIC_THREADS: {
+    textMax: 500,
+    strict: true,
+    countTitleInText: true,
+    tagsInText: true,
+    imagesMax: 20,
+    videoMaxSec: 300,
+  },
+  DYNAMIC_BLUESKY: {
+    textMax: 300,
+    strict: true,
+    countTitleInText: true,
+    tagsInText: true,
+    imagesMax: 4,
+    videoMaxSec: 180,
+  },
+  VIDEO_BLUESKY: { textMax: 300, strict: true, countTitleInText: true, tagsInText: true, videoMaxSec: 180 },
   DYNAMIC_INSTAGRAM: {
     textMax: 2200,
+    strict: true,
     countTitleInText: true,
     tagsInText: true,
     tagsMax: 30,
-    imagesMax: 10,
+    imagesMax: 20,
     mediaRequired: true,
   },
   DYNAMIC_FACEBOOK: { textMax: 63206, countTitleInText: true, tagsInText: true },
@@ -41,8 +67,8 @@ export const PLATFORM_RULES: Record<string, PlatformRules> = {
   DYNAMIC_PINTEREST: { titleMax: 100, textMax: 500, imageRequired: true },
   DYNAMIC_WEIBO: { textMax: 2000, countTitleInText: true, tagsInText: true, imagesMax: 18 },
   VIDEO_WEIBO: { textMax: 2000, titleMax: 30 },
-  DYNAMIC_REDNOTE: { titleMax: 20, textMax: 1000, imagesMax: 18, mediaRequired: true, tagsInText: true },
-  VIDEO_REDNOTE: { titleMax: 20, textMax: 1000, tagsInText: true, preferVertical: true },
+  DYNAMIC_REDNOTE: { titleMax: 20, textMax: 1000, strict: true, imagesMax: 18, mediaRequired: true, tagsInText: true },
+  VIDEO_REDNOTE: { titleMax: 20, textMax: 1000, strict: true, tagsInText: true, preferVertical: true },
   DYNAMIC_DOUYIN: { titleMax: 20, textMax: 1000, imagesMax: 35, mediaRequired: true, tagsInText: true },
   VIDEO_DOUYIN: { titleMax: 30, textMax: 1000, tagsInText: true, preferVertical: true },
   VIDEO_TIKTOK: { textMax: 2200, countTitleInText: true, tagsInText: true, videoMaxSec: 3600, preferVertical: true },
@@ -50,6 +76,8 @@ export const PLATFORM_RULES: Record<string, PlatformRules> = {
     titleRequired: true,
     titleMax: 100,
     textMax: 5000,
+    textCount: "bytes",
+    strict: true,
     tagsTotalChars: 500,
     coverAspect: 16 / 9,
   },
@@ -121,11 +149,40 @@ export function charCount(text: string): number {
   }
 }
 
+/**
+ * X's weighted length (twitter-text v3): most Latin/punctuation counts 1, CJK and emoji count 2,
+ * and every link counts 23 regardless of its length.
+ */
+export function xWeightedLength(text: string): number {
+  const URL = /https?:\/\/[^\s]+/g;
+  let total = (text.match(URL)?.length ?? 0) * 23;
+  const rest = text.replace(URL, "");
+  const light = (cp: number) =>
+    (cp >= 0 && cp <= 4351) || (cp >= 8192 && cp <= 8205) || (cp >= 8208 && cp <= 8223) || (cp >= 8242 && cp <= 8247);
+  let graphemes: string[];
+  try {
+    graphemes = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(rest)].map((g) => g.segment);
+  } catch {
+    graphemes = [...rest];
+  }
+  for (const g of graphemes) {
+    if (/\p{Extended_Pictographic}/u.test(g)) total += 2;
+    else for (const ch of g) total += light(ch.codePointAt(0)!) ? 1 : 2;
+  }
+  return total;
+}
+
+export function measure(rules: PlatformRules, text: string): number {
+  if (rules.textCount === "x-weighted") return xWeightedLength(text);
+  if (rules.textCount === "bytes") return new TextEncoder().encode(text).length;
+  return charCount(text);
+}
+
 export function captionLength(rules: PlatformRules, input: CheckInput): number {
   let text = input.content;
   if (rules.countTitleInText && input.title.trim()) text = `${input.title}\n\n${text}`;
   if (rules.tagsInText && input.tags.length) text = `${text} ${input.tags.map((t) => `#${t}`).join(" ")}`;
-  return charCount(text.trim());
+  return measure(rules, text.trim());
 }
 
 export function checkPost(platform: string, input: CheckInput): Issue[] {
@@ -134,12 +191,13 @@ export function checkPost(platform: string, input: CheckInput): Issue[] {
   const titleLen = charCount(input.title.trim());
 
   if (r.titleRequired && !titleLen) issues.push({ level: "error", code: "titleRequired" });
+  const limitLevel = r.strict ? "error" : "warn";
   if (r.titleMax && titleLen > r.titleMax) {
-    issues.push({ level: "error", code: "titleTooLong", vars: { max: r.titleMax, n: titleLen } });
+    issues.push({ level: limitLevel, code: "titleTooLong", vars: { max: r.titleMax, n: titleLen } });
   }
   if (r.textMax) {
     const n = captionLength(r, input);
-    if (n > r.textMax) issues.push({ level: "error", code: "textTooLong", vars: { max: r.textMax, n } });
+    if (n > r.textMax) issues.push({ level: limitLevel, code: "textTooLong", vars: { max: r.textMax, n } });
   }
   if (r.tagsMax && input.tags.length > r.tagsMax) {
     issues.push({ level: "warn", code: "tooManyTags", vars: { max: r.tagsMax, n: input.tags.length } });
@@ -204,6 +262,9 @@ export function describeRules(platform: string, type: ContentType): string {
       `${r.countTitleInText ? "title + text" : "text"}${r.tagsInText ? " + #hashtags" : ""} at most ${r.textMax} characters in total`,
     );
   }
+  if (r.textCount === "x-weighted")
+    parts.push("Chinese/Japanese/Korean characters and emoji count as 2, every link counts as 23");
+  if (r.textCount === "bytes") parts.push("the text limit is in UTF-8 bytes (CJK characters use 3)");
   if (r.tagsMax) parts.push(`at most ${r.tagsMax} tags`);
   if (r.tagMaxLength) parts.push(`each tag at most ${r.tagMaxLength} characters`);
   if (r.tagsTotalChars) parts.push(`all tags together at most ${r.tagsTotalChars} characters`);

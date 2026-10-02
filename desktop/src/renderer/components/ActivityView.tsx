@@ -240,7 +240,7 @@ function outcomeOf(job: PublishJob): Outcome {
   if (job.status === "failed") return "failed";
   if (job.status === "cancelled") return "cancelled";
   if (job.status === "attention") return "attention";
-  if (job.verification === "published" || job.verification === "likely") return "published";
+  if (job.verification === "published") return "published";
   if (!job.autoPublish) return "review";
   return "unconfirmed";
 }
@@ -257,7 +257,7 @@ function VerificationBadge({ job }: { job: PublishJob }) {
     icon = <BadgeCheck size={12} />;
   } else if (v === "likely") {
     label = t("verif_likely");
-    cls = "bg-success/10 text-success";
+    cls = "bg-warning/10 text-warning";
     icon = <CheckCircle2 size={12} />;
     help = t("verifHelp_likely");
   } else if (!job.autoPublish) {

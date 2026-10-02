@@ -5,7 +5,7 @@ import { infoMap } from "../src/main/platforms";
 import { preflight } from "../src/main/preflight";
 import { cancelJob, retryJob, startPublish } from "../src/main/publisher";
 import { markScriptless } from "../src/main/sessions";
-import { flush, getState, update } from "../src/main/store";
+import { flush, getState, publicState, update } from "../src/main/store";
 
 // Self-contained like every real inject function.
 async function e2eInject(data: {
@@ -59,4 +59,5 @@ for (const [name, injectUrl, fn] of [
   createAccountWindow,
   markScriptless,
   preflight,
+  publicState,
 };

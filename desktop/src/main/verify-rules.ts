@@ -73,6 +73,8 @@ export const VERIFY_RULES: Record<string, VerifyRule[]> = {
     {
       // …and saves details/visibility when you press Publish/Save.
       url: /\/youtubei\/v1\/video_manager\/metadata_update\b/,
+      // Studio autosaves drafts through the same endpoint; only the Publish/Save that sets visibility counts.
+      postData: /"(privacyState|privacy)"\s*:\s*\{[^}]*"newPrivacy"|"scheduledPublishing"/,
       ok: (b) => !b?.error && !(b?.overallResult?.resultCode && b.overallResult.resultCode !== "UPDATE_SUCCESS"),
       error: (b) => b?.error?.message ?? b?.overallResult?.resultCode,
     },
@@ -190,7 +192,17 @@ export const VERIFY_RULES: Record<string, VerifyRule[]> = {
     },
   ],
   reddit: [
-    { url: /\/(api\/submit|svc\/shreddit\/graphql|svc\/shreddit\/post-submit)\b/, postData: /submit|CreatePost|post/i },
+    {
+      url: /\/api\/submit\b/,
+      ok: (b) => !b?.json?.errors?.length && b?.success !== false,
+      error: (b) => b?.json?.errors?.[0]?.[1],
+    },
+    {
+      url: /\/svc\/shreddit\/graphql\b/,
+      postData: /"operationName"\s*:\s*"(CreatePost|SubmitPost|CreateSubredditPost|CreateProfilePost)"/,
+      ok: (b) => !b?.errors?.length,
+      error: (b) => b?.errors?.[0]?.message,
+    },
   ],
   kuaishou: [
     {
@@ -199,7 +211,13 @@ export const VERIFY_RULES: Record<string, VerifyRule[]> = {
       error: errMsg,
     },
   ],
-  zhihu: [{ url: /\/api\/v4\/(content\/publish|pins)\b|\/api\/articles\/\d+\/publish\b/ }],
+  zhihu: [
+    {
+      url: /\/api\/v4\/(content\/publish|pins)\b|\/api\/articles\/\d+\/publish\b/,
+      ok: (b) => !b?.error && (b?.code === undefined || b.code === 0),
+      error: (b) => b?.error?.message ?? b?.message,
+    },
+  ],
   weixinchannel: [
     {
       url: /\/mmfinderassistant-bin\/post\/post_create\b/,
@@ -210,4 +228,4 @@ export const VERIFY_RULES: Record<string, VerifyRule[]> = {
 };
 
 /** Generic heuristic for platforms without a rule: a successful write request to the platform's own site. */
-export const GENERIC_PUBLISH_URL = /(publish|create|submit|post|add|save|release|upload_done|complete)/i;
+export const GENERIC_PUBLISH_URL = /(publish|create|submit|release)/i;

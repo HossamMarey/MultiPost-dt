@@ -13,10 +13,11 @@ export interface ResolvedContent {
 
 export interface TargetContext {
   platform: string;
-  account: Pick<Account, "id" | "label">;
+  account: Pick<Account, "id" | "label"> & { timezone?: string };
   siteLabel: string;
   groups: Group[]; // groups the account belongs to
   now?: Date;
+  timezone?: string; // the account's timezone for {date}/{time}
 }
 
 export const platformKey = (platform: string) => `platform:${platform}`;
@@ -38,14 +39,33 @@ function applyOverride(base: ResolvedContent, o: ContentOverride | undefined): R
 
 /** {account}, {site}, {date}, {time} in titles, text and footers. Unknown braces are left alone. */
 export function fillTemplate(text: string, ctx: TargetContext): string {
+  ctx = { ...ctx, timezone: ctx.timezone ?? ctx.account.timezone };
   const now = ctx.now ?? new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  const vars: Record<string, string> = {
-    account: ctx.account.label,
-    site: ctx.siteLabel,
-    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
-    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
-  };
+  let date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  let time = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  if (ctx.timezone) {
+    try {
+      const parts = Object.fromEntries(
+        new Intl.DateTimeFormat("en-CA", {
+          timeZone: ctx.timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        })
+          .formatToParts(now)
+          .map((p) => [p.type, p.value]),
+      );
+      date = `${parts.year}-${parts.month}-${parts.day}`;
+      time = `${parts.hour}:${parts.minute}`;
+    } catch {
+      // unknown zone: keep local time
+    }
+  }
+  const vars: Record<string, string> = { account: ctx.account.label, site: ctx.siteLabel, date, time };
   return text.replace(/\{(account|site|date|time)\}/g, (_, k: string) => vars[k]);
 }
 

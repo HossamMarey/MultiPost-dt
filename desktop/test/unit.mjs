@@ -77,6 +77,16 @@ test("group footers and hashtags are added once, with template variables", () =>
   assert.deepEqual(r.tags, ["one", "two", "three", "four", "grp"]);
 });
 
+test("{date}/{time} use the account's timezone", () => {
+  const now = new Date(Date.UTC(2026, 0, 2, 23, 30));
+  assert.equal(m.fillTemplate("{date} {time}", ctx({ now, account: { id: "a", label: "A", timezone: "Asia/Tokyo" } })), "2026-01-03 08:30");
+});
+
+test("YouTube description counts UTF-8 bytes", () => {
+  const issues = m.checkPost("VIDEO_YOUTUBE", { type: "VIDEO", title: "t", content: "字".repeat(1700), tags: [], images: [], videos: [] });
+  assert.ok(issues.some((i) => i.code === "textTooLong" && i.vars.n === 5100));
+});
+
 test("unknown braces are left alone", () => {
   assert.equal(m.fillTemplate("{price} {account}", ctx()), "{price} Brand");
 });
@@ -96,8 +106,14 @@ test("X counts title + text + hashtags against 280 graphemes", () => {
     type: "DYNAMIC", title: "", content: "x".repeat(270), tags: ["abcdefghij"], images: [], videos: [],
   });
   assert.ok(issues.some((i) => i.code === "textTooLong" && i.vars.n === 282));
-  const ok = m.checkPost("DYNAMIC_X", { type: "DYNAMIC", title: "", content: "😀".repeat(280), tags: [], images: [], videos: [] });
-  assert.equal(ok.length, 0, "emoji count once");
+  // X weights emoji and CJK as 2 and every link as 23.
+  assert.equal(m.xWeightedLength("😀".repeat(140)), 280);
+  assert.equal(m.xWeightedLength("中文"), 4);
+  assert.equal(m.xWeightedLength(`see https://example.com/${"x".repeat(200)}`), 4 + 23);
+  const cjk = m.checkPost("DYNAMIC_X", { type: "DYNAMIC", title: "", content: "字".repeat(150), tags: [], images: [], videos: [] });
+  assert.ok(cjk.some((i) => i.code === "textTooLong" && i.level === "warn"), "X limit is a warning (Premium allows more)");
+  const bsky = m.checkPost("DYNAMIC_BLUESKY", { type: "DYNAMIC", title: "", content: "b".repeat(301), tags: [], images: [], videos: [] });
+  assert.ok(bsky.some((i) => i.code === "textTooLong" && i.level === "error"), "Bluesky limit is hard");
 });
 
 test("Instagram needs media, YouTube needs a title, Bilibili tag limits", () => {

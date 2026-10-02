@@ -39,7 +39,17 @@ import {
   removePartitionDirs,
   validateProxy,
 } from "./sessions";
-import { SECRET_MASK, flush, getState, loadState, onChange, publicState, replaceState, update } from "./store";
+import {
+  SECRET_MASK,
+  flush,
+  getState,
+  loadState,
+  onChange,
+  publicState,
+  replaceState,
+  unmaskProxy,
+  update,
+} from "./store";
 import { startAutoUpdates } from "./updater";
 
 registerSchemes();
@@ -258,6 +268,11 @@ function registerIpc() {
     return account;
   });
   handle("account:update", (_e, id: string, patch: Partial<Account>) => {
+    if (typeof patch.proxy === "string" && patch.proxy.includes(SECRET_MASK)) {
+      // The UI only sees masked proxy passwords: put the stored one back.
+      const stored = getState().accounts.find((a) => a.id === id)?.proxy;
+      patch.proxy = unmaskProxy(patch.proxy, stored);
+    }
     if ("proxy" in patch) validateProxy(patch.proxy);
     update((s) => {
       const a = s.accounts.find((x) => x.id === id);
@@ -431,6 +446,8 @@ function registerIpc() {
           userAgent: typeof a.userAgent === "string" ? a.userAgent : undefined,
           extraConfig: a.extraConfig && typeof a.extraConfig === "object" ? a.extraConfig : undefined,
           notes: typeof a.notes === "string" ? a.notes : undefined,
+          timezone: typeof a.timezone === "string" ? a.timezone.slice(0, 64) : undefined,
+          locale: typeof a.locale === "string" ? a.locale.slice(0, 35) : undefined,
           status: "unknown",
           createdAt: Number(a.createdAt) || Date.now(),
         } satisfies Account;
@@ -452,6 +469,10 @@ function registerIpc() {
         color: typeof g.color === "string" && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color : GROUP_COLORS[0],
         accountIds: (Array.isArray(g.accountIds) ? g.accountIds : []).filter((x) => validIds.has(x)),
         createdAt: Number(g.createdAt) || Date.now(),
+        footer: typeof g.footer === "string" ? g.footer.slice(0, 2000) : undefined,
+        hashtags: Array.isArray(g.hashtags)
+          ? g.hashtags.filter((x): x is string => typeof x === "string").slice(0, 50)
+          : undefined,
       }));
     const groups = [...current.groups.filter((g) => !importedGroups.some((b) => b.id === g.id)), ...importedGroups];
     replaceState({ ...current, accounts, groups });

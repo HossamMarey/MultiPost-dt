@@ -222,8 +222,11 @@ function pump() {
     runJob(jobId)
       .catch((error) => {
         if (!ACTIVE.includes(jobStatus(jobId)!)) return;
-        const job = getState().jobs.find((j) => j.id === jobId);
-        const retryNo = (job?.attempts ?? 1) - 1;
+        if (isProvenPublished(jobId)) {
+          setJob(jobId, { status: "done", error: undefined, finishedAt: Date.now() });
+          return;
+        }
+        const retryNo = netRetries.get(jobId) ?? 0;
         if (error instanceof NetworkError && getState().settings.autoRetry && retryNo < RETRY_DELAYS_MS.length) {
           const delay = RETRY_DELAYS_MS[retryNo];
           const entry = windows.get(jobId);
@@ -256,26 +259,42 @@ function pump() {
 // How long after an auto-submit we wait for the platform's confirmation before calling it unconfirmed.
 const VERIFY_WAIT_MS = 3 * 60_000;
 
+function isProvenPublished(jobId: string): boolean {
+  return getState().jobs.find((j) => j.id === jobId)?.verification === "published";
+}
+
 function applyVerification(jobId: string, u: VerificationUpdate, autoPublish: boolean) {
   const job = getState().jobs.find((j) => j.id === jobId);
   if (!job) return;
   const patch: Partial<PublishJob> = { ...u };
-  if (u.verification === "rejected") {
+  if (u.verification === "published") {
+    // The platform confirmed the post: that outranks any script error, timeout or window event.
+    if (job.status !== "injecting" && job.status !== "done") {
+      patch.status = "done";
+      patch.finishedAt = job.finishedAt ?? Date.now();
+    }
+    patch.error = undefined;
+  } else if (u.verification === "rejected") {
     // The platform said no: never show this as done.
     if (job.status === "done" || job.status === "injecting" || job.status === "attention") {
       patch.status = autoPublish ? "failed" : "attention";
       patch.error = `The platform rejected the post: ${u.verificationNote}`;
       patch.finishedAt = job.finishedAt ?? Date.now();
     }
-  } else if (u.verification === "published" && job.status === "attention") {
-    patch.status = "done";
-    patch.error = undefined;
   }
   setJob(jobId, patch);
   const entry = windows.get(jobId);
-  if (u.verification === "published" && autoPublish && getState().settings.closeWindowsOnSuccess && entry) {
+  const keepOpen = job.platform.startsWith("VIDEO_") || job.platform.startsWith("PODCAST_"); // uploads may still run
+  if (
+    u.verification === "published" &&
+    autoPublish &&
+    !keepOpen &&
+    getState().settings.closeWindowsOnSuccess &&
+    entry
+  ) {
     setTimeout(() => !entry.win.isDestroyed() && entry.win.close(), 3000);
   }
+  pump(); // a settled verification can free a window slot
 }
 
 class JobAbort extends Error {}
@@ -286,6 +305,8 @@ class NetworkError extends Error {}
 // Chromium net error codes worth retrying (timeouts, resets, DNS, proxy and connectivity hiccups).
 const TRANSIENT_NET_ERRORS = new Set([-7, -15, -21, -100, -101, -102, -104, -105, -106, -109, -118, -130, -137, -324]);
 const RETRY_DELAYS_MS = [20_000, 60_000];
+const netRetries = new Map<string, number>(); // automatic network retries per job
+const pendingRetries = new Set<string>();
 
 /** Rejects when the page crashes, hangs, or its window is closed — for the whole life of the job. */
 function watchdog(win: BrowserWindow): { aborted: Promise<never>; dispose: () => void } {
@@ -412,17 +433,18 @@ async function runJob(jobId: string) {
   // Watch what the platform answers for as long as the window is open: in review mode the user
   // presses publish themselves, possibly long after the form was filled.
   setJob(jobId, { verification: "pending", verificationNote: undefined, postUrl: undefined });
-  const stopWatching = watchPublish(win.webContents, {
+  const watch = watchPublish(win.webContents, {
     siteKey: account.accountKey,
     publishUrl: injectUrl,
     context: { username: account.profile?.username },
     onUpdate: (u) => applyVerification(jobId, u, syncData.isAutoPublish),
   });
   win.on("closed", () => {
-    stopWatching();
+    watch.stop();
     windows.delete(jobId);
     if (ACTIVE.includes(jobStatus(jobId)!)) {
-      setJob(jobId, { status: "cancelled", error: "Window closed", finishedAt: Date.now() });
+      if (isProvenPublished(jobId)) setJob(jobId, { status: "done", error: undefined, finishedAt: Date.now() });
+      else setJob(jobId, { status: "cancelled", error: "Window closed", finishedAt: Date.now() });
     }
     if (getState().jobs.find((j) => j.id === jobId)?.verification === "pending") {
       setJob(jobId, { verification: "unconfirmed" });
@@ -496,11 +518,18 @@ async function runJob(jobId: string) {
     }
     setJob(jobId, { status: "done", finishedAt: Date.now(), url: finalUrl });
     if (syncData.isAutoPublish) {
+      watch.arm();
+      const attempt = getState().jobs.find((x) => x.id === jobId)?.attempts;
       // Uploads and processing can take a while after the click; give the platform time to answer.
       setTimeout(() => {
         const j = getState().jobs.find((x) => x.id === jobId);
-        if (j?.verification === "pending") setJob(jobId, { verification: "unconfirmed" });
-        if (settings.closeWindowsOnSuccess && j?.verification === "published" && !win.isDestroyed()) win.close();
+        if (!j || j.attempts !== attempt) return; // a newer attempt owns the job now
+        if (j.verification === "pending") setJob(jobId, { verification: "unconfirmed" });
+        pump();
+        const uploading = j.platform.startsWith("VIDEO_") || j.platform.startsWith("PODCAST_");
+        if (settings.closeWindowsOnSuccess && j.verification === "published" && !uploading && !win.isDestroyed()) {
+          win.close();
+        }
       }, VERIFY_WAIT_MS);
     }
   } catch (error) {
@@ -518,6 +547,9 @@ export function customInjectUrl(account: Account): string | undefined {
 
 export function retryJob(jobId: string) {
   const job = getState().jobs.find((j) => j.id === jobId);
+  if (job && (job.verification === "published" || job.verification === "likely")) {
+    throw new Error("This post was already accepted by the platform. Publishing again would create a duplicate.");
+  }
   if (!job || !runs.get(job.runId)?.syncDataByJob.has(jobId)) {
     throw new Error("This job's files are no longer available. Publish again from the composer.");
   }
@@ -525,6 +557,7 @@ export function retryJob(jobId: string) {
   const entry = windows.get(jobId);
   windows.delete(jobId);
   if (entry && !entry.win.isDestroyed()) entry.win.destroy();
+  netRetries.delete(jobId);
   setJob(jobId, { status: "queued", error: undefined, finishedAt: undefined });
   queue.push(jobId);
   pump();
@@ -554,7 +587,9 @@ export function openJobWindowIds(): string[] {
 
 export function canRetry(jobId: string): boolean {
   const job = getState().jobs.find((j) => j.id === jobId);
-  return !!job && !!runs.get(job.runId)?.syncDataByJob.has(jobId);
+  // Never offer to publish again something the platform already accepted.
+  if (!job || job.verification === "published" || job.verification === "likely") return false;
+  return !!runs.get(job.runId)?.syncDataByJob.has(jobId);
 }
 
 /** Drop in-memory payloads (and file access) of runs removed from history. */
@@ -568,7 +603,7 @@ export function forgetRuns(runIds: string[]) {
 }
 
 export function activeJobCount() {
-  return active + queue.length;
+  return active + queue.length + pendingRetries.size;
 }
 
 export function waitingForWindowCount() {

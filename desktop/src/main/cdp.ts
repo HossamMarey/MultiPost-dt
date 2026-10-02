@@ -49,8 +49,22 @@ export function instrument(wc: WebContents, account: Pick<Account, "timezone" | 
   const send = (method: string, params?: Record<string, unknown>) =>
     dbg.sendCommand(method, params).catch((error: Error) => console.warn(`[cdp] ${method}:`, error.message));
 
-  if (account.timezone?.trim()) send("Emulation.setTimezoneOverride", { timezoneId: account.timezone.trim() });
-  if (account.locale?.trim()) send("Emulation.setLocaleOverride", { locale: account.locale.trim() });
+  const applyIdentity = (sessionId?: string) => {
+    const tasks: Promise<unknown>[] = [];
+    if (account.timezone?.trim()) {
+      tasks.push(dbg.sendCommand("Emulation.setTimezoneOverride", { timezoneId: account.timezone.trim() }, sessionId));
+    }
+    if (account.locale?.trim()) {
+      tasks.push(dbg.sendCommand("Emulation.setLocaleOverride", { locale: account.locale.trim() }, sessionId));
+    }
+    return Promise.allSettled(tasks);
+  };
+  applyIdentity();
+  if (account.timezone?.trim() || account.locale?.trim()) {
+    // Cross-origin iframes (login/captcha widgets) run in their own targets: give them the same identity
+    // before they start. Workers can't be emulated by CDP; they are resumed untouched.
+    send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+  }
   // Bounded buffers: only metadata is kept; bodies are fetched on demand for matching requests.
   send("Network.enable", { maxTotalBufferSize: 20_000_000, maxResourceBufferSize: 5_000_000 });
 
@@ -58,6 +72,26 @@ export function instrument(wc: WebContents, account: Pick<Account, "timezone" | 
   const responses = new Map<string, { status: number; mimeType: string }>();
 
   dbg.on("message", (_event, method, params) => {
+    if (method === "Target.attachedToTarget") {
+      const child: string = params.sessionId;
+      const type: string = params.targetInfo?.type ?? "";
+      (async () => {
+        try {
+          if (type === "iframe") {
+            await applyIdentity(child);
+            await dbg.sendCommand(
+              "Target.setAutoAttach",
+              { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+              child,
+            );
+          }
+        } finally {
+          // Always let the target run, whatever happened above.
+          await dbg.sendCommand("Runtime.runIfWaitingForDebugger", {}, child).catch(() => {});
+        }
+      })();
+      return;
+    }
     if (method === "Network.requestWillBeSent") {
       const r = params.request;
       if (r.method === "GET" || r.method === "OPTIONS" || r.method === "HEAD") return;

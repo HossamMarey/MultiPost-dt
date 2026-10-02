@@ -245,6 +245,8 @@ try {
     return safeStorage.isEncryptionAvailable();
   }, ids[1]);
   const onDisk = fs.readFileSync(path.join(userData, "multipost-data.json"), "utf8");
+  const uiProxy = await app.evaluate(({}, id) => globalThis.__mp.publicState().accounts.find((a) => a.id === id).proxy, ids[1]);
+  check(!uiProxy.includes("S3cretPass") && uiProxy.includes("alice:"), `proxy password masked for the UI (${uiProxy})`);
   check(!enc || !onDisk.includes("S3cretPass"), `proxy password not stored in clear (encryption available: ${enc})`);
   await app.evaluate(({}, id) => {
     globalThis.__mp.update((s) => {
@@ -276,6 +278,17 @@ try {
     verified.length >= 2 && verified.every(([v, u]) => v === "published" && u === "https://x.com/i/web/status/1234567890"),
     `auto-submitted posts confirmed with a link (${JSON.stringify(verified[0])})`,
   );
+  const dupGuard = await app.evaluate(({}) => {
+    const mp = globalThis.__mp;
+    const job = mp.getState().jobs.find((j) => j.verification === "published");
+    try {
+      mp.retryJob(job.id);
+      return "retried";
+    } catch (e) {
+      return String(e.message);
+    }
+  });
+  check(/duplicate/i.test(dupGuard), `retry refused for a confirmed post (${dupGuard})`);
   run = await publish([{ accountId: ids[0], platform: "DYNAMIC_E2E_REJECT" }], true, "Duplicate");
   jobs = await waitJobs(run, (j) => j[0]?.status === "failed" || j[0]?.verification === "rejected", 20000);
   const rej = (await app.evaluate(({}, r) => globalThis.__mp.getState().jobs.find((j) => j.runId === r), run));

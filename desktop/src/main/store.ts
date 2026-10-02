@@ -102,9 +102,35 @@ export function getState(): AppState {
 
 export const SECRET_MASK = "••••••••";
 
+function parseProxyUrl(proxy: string): URL | null {
+  try {
+    return new URL(/^[a-z0-9]+:\/\//i.test(proxy) ? proxy : `http://${proxy}`);
+  } catch {
+    return null;
+  }
+}
+
+/** "http://user:secret@host:8080" → "http://user:••••••••@host:8080" */
+export function maskProxy(proxy: string | undefined): string | undefined {
+  if (!proxy) return proxy;
+  const u = parseProxyUrl(proxy);
+  if (!u?.password) return proxy;
+  return proxy.replace(`:${u.password}@`, `:${SECRET_MASK}@`);
+}
+
+/** Puts the stored password back into a proxy URL the user edited while it was masked. */
+export function unmaskProxy(edited: string, stored: string | undefined): string {
+  const storedUrl = stored ? parseProxyUrl(stored) : null;
+  return edited.replace(`:${SECRET_MASK}@`, storedUrl?.password ? `:${storedUrl.password}@` : "@");
+}
+
 /** The state as the UI may see it: secrets are replaced by a mask. */
 export function publicState(): AppState {
-  return { ...state, settings: { ...state.settings, aiApiKey: state.settings.aiApiKey ? SECRET_MASK : undefined } };
+  return {
+    ...state,
+    accounts: state.accounts.map((a) => (a.proxy ? { ...a, proxy: maskProxy(a.proxy) } : a)),
+    settings: { ...state.settings, aiApiKey: state.settings.aiApiKey ? SECRET_MASK : undefined },
+  };
 }
 
 function sleepSync(ms: number) {
