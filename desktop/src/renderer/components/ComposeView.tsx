@@ -17,6 +17,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { captionLength, rulesFor } from "../../shared/platform-rules";
 import type { Account, ContentType, Draft, LocalFile, PlatformMeta, PreflightReport } from "../../shared/types";
 import { api, errorMessage, fileUrl, formatBytes } from "../api";
 import { type ResolvedTarget, issueText, splitKey, useResolvedTargets, withMediaMeta } from "../compose-logic";
@@ -77,6 +78,12 @@ export function ComposeView() {
   const targets = targetsByType[draft.contentType] ?? [];
   const setTargets = (list: string[]) => setTargetsByType((m) => ({ ...m, [draft.contentType]: list }));
   const resolved = useResolvedTargets(draft, targets);
+  const [activePlatform, setActivePlatform] = useState<string | null>(null);
+  const customizeRef = useRef<HTMLDivElement>(null);
+  const openPlatform = (platform: string) => {
+    setActivePlatform(platform);
+    requestAnimationFrame(() => customizeRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   return (
     <div className="flex h-full">
@@ -110,14 +117,27 @@ export function ComposeView() {
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
-            <Editor draft={draft} patch={patch} />
-            <CustomizePanel draft={draft} patch={patch} targets={resolved} />
+            <Editor
+              draft={draft}
+              patch={patch}
+              counters={<PlatformCounters targets={resolved} onOpen={openPlatform} />}
+            />
+            <div ref={customizeRef} className="scroll-mt-4">
+              <CustomizePanel
+                draft={draft}
+                patch={patch}
+                targets={resolved}
+                active={activePlatform}
+                setActive={setActivePlatform}
+              />
+            </div>
           </div>
         </div>
       </section>
       <TargetsPanel
         draft={draft}
         resolved={resolved}
+        onOpenPlatform={openPlatform}
         targets={targets}
         setTargets={setTargets}
         autoPublish={autoPublish}
@@ -127,7 +147,67 @@ export function ComposeView() {
   );
 }
 
-function Editor({ draft, patch }: { draft: Draft; patch: (p: Partial<Draft>) => void }) {
+/** One live counter per selected platform, right under the main text (click to customize that platform). */
+function PlatformCounters({ targets, onOpen }: { targets: ResolvedTarget[]; onOpen: (platform: string) => void }) {
+  const items = useMemo(() => {
+    const byPlatform = new Map<string, ResolvedTarget[]>();
+    for (const tg of targets) byPlatform.set(tg.platform.name, [...(byPlatform.get(tg.platform.name) ?? []), tg]);
+    return [...byPlatform.entries()].map(([name, list]) => {
+      const rules = rulesFor(name, list[0].platform.type);
+      const counts = list.map((x) =>
+        captionLength(rules, {
+          type: x.platform.type,
+          title: x.resolved.title,
+          content: x.resolved.content,
+          tags: x.resolved.tags,
+          images: [],
+          videos: [],
+        }),
+      );
+      return { name, list, rules, max: Math.max(...counts), level: worstLevel(list.flatMap((x) => x.issues)) };
+    });
+  }, [targets]);
+  if (items.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map(({ name, list, rules, max, level }) => (
+        <button
+          key={name}
+          type="button"
+          onClick={() => onOpen(name)}
+          title={
+            list
+              .flatMap((x) => x.issues)
+              .map(issueText)
+              .join("\n") || t("customizeTitle")
+          }
+          className={cx(
+            "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium tabular-nums transition hover:bg-elevated",
+            level === "error"
+              ? "border-danger/40 text-danger"
+              : level === "warn"
+                ? "border-warning/40 text-warning"
+                : "border-border text-muted",
+          )}>
+          <Favicon siteKey={list[0].account.accountKey} label={list[0].platform.platformName} size={14} />
+          {list[0].platform.platformName}
+          {rules.textMax ? (
+            <span>
+              {max}/{rules.textMax}
+            </span>
+          ) : null}
+          {level === "error" ? <XCircle size={12} /> : level === "warn" ? <AlertTriangle size={12} /> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Editor({
+  draft,
+  patch,
+  counters,
+}: { draft: Draft; patch: (p: Partial<Draft>) => void; counters?: React.ReactNode }) {
   const type = draft.contentType;
   return (
     <>
@@ -153,6 +233,7 @@ function Editor({ draft, patch }: { draft: Draft; patch: (p: Partial<Draft>) => 
           minRows={type === "DYNAMIC" ? 8 : 4}
         />
       )}
+      {counters}
       {type === "DYNAMIC" && (
         <div className="grid grid-cols-2 gap-4">
           <MediaGrid
@@ -558,6 +639,7 @@ interface TargetRow {
 function TargetsPanel({
   draft,
   resolved,
+  onOpenPlatform,
   targets,
   setTargets,
   autoPublish,
@@ -565,6 +647,7 @@ function TargetsPanel({
 }: {
   draft: Draft;
   resolved: ResolvedTarget[];
+  onOpenPlatform: (platform: string) => void;
   targets: string[];
   setTargets: (t: string[]) => void;
   autoPublish: boolean;
@@ -773,6 +856,14 @@ function TargetsPanel({
                         {platforms.length === 1 ? platforms[0].platformName : site?.label}
                         {account.profile?.username && ` · @${account.profile.username.replace(/^@/, "")}`}
                       </span>
+                      {(() => {
+                        const firstError = keys.some((k) => selectedSet.has(k))
+                          ? (issuesByAccount.get(account.id) ?? []).find((i) => i.level === "error")
+                          : undefined;
+                        return firstError ? (
+                          <span className="truncate text-[11px] text-danger">{issueText(firstError)}</span>
+                        ) : null;
+                      })()}
                     </div>
                     <RowBadges
                       issues={keys.some((k) => selectedSet.has(k)) ? (issuesByAccount.get(account.id) ?? []) : []}

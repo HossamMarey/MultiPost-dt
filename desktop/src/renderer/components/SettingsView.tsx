@@ -73,7 +73,7 @@ export function SettingsView() {
               onChange={(e) => set({ concurrency: Number(e.target.value) })}
             />
           </Row>
-          <Row title={t("pageTimeout")}>
+          <Row title={t("pageTimeout")} hint={t("pageTimeoutHint")}>
             <input
               type="number"
               min={10}

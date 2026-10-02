@@ -16,12 +16,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { JobStatus, PublishJob } from "../../shared/types";
 import { api, errorMessage } from "../api";
 import { useApp } from "../context";
-import { type MessageKey, t, timeAgo } from "../i18n";
+import { t, timeAgo } from "../i18n";
 import { Button, EmptyState, Favicon, IconButton, cx, useFeedback } from "./ui";
 
 const ACTIVE: JobStatus[] = ["queued", "loading", "injecting"];
 
-function StatusPill({ status, review }: { status: JobStatus; review?: boolean }) {
+function StatusPill({ status }: { status: JobStatus }) {
   const map: Record<JobStatus, { label: string; cls: string; icon: React.ReactNode }> = {
     queued: { label: t("jobQueued"), cls: "bg-elevated text-muted", icon: <Clock size={12} /> },
     loading: {
@@ -35,7 +35,7 @@ function StatusPill({ status, review }: { status: JobStatus; review?: boolean })
       icon: <Loader2 size={12} className="animate-spin" />,
     },
     done: {
-      label: review ? t("jobFilled") : t("jobDone"),
+      label: t("jobDone"),
       cls: "bg-success/10 text-success",
       icon: <CheckCircle2 size={12} />,
     },
@@ -97,8 +97,13 @@ export function ActivityView() {
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
             {runs.map((run) => {
               const jobs = run.jobIds.map((id) => jobsById.get(id)).filter(Boolean) as PublishJob[];
-              const done = jobs.filter((j) => j.status === "done").length;
-              const failed = jobs.filter((j) => j.status === "failed").length;
+              const kinds = jobs.map(outcomeOf);
+              const count = (k: Outcome) => kinds.filter((x) => x === k).length;
+              const published = count("published");
+              const unconfirmed = count("unconfirmed");
+              const review = count("review");
+              const failed = count("failed");
+              const cancelled = count("cancelled");
               const active = jobs.filter((j) => ACTIVE.includes(j.status)).length;
               const failedRetryable = jobs.filter(
                 (j) =>
@@ -118,8 +123,13 @@ export function ActivityView() {
                         <span>·</span>
                         <span>{timeAgo(run.createdAt)}</span>
                         <span>·</span>
-                        <span className="text-success">{t("doneCount", { n: done })}</span>
+                        {published > 0 && <span className="text-success">{t("sumPublished", { n: published })}</span>}
+                        {unconfirmed > 0 && (
+                          <span className="text-warning">{t("sumUnconfirmed", { n: unconfirmed })}</span>
+                        )}
+                        {review > 0 && <span className="text-muted">{t("sumReview", { n: review })}</span>}
                         {failed > 0 && <span className="text-danger">{t("failedCount", { n: failed })}</span>}
+                        {cancelled > 0 && <span className="text-muted">{t("sumCancelled", { n: cancelled })}</span>}
                         {active > 0 && <span className="text-primary-600">{t("running", { n: active })}</span>}
                       </div>
                     </div>
@@ -174,8 +184,12 @@ export function ActivityView() {
                               </span>
                             )}
                           </div>
-                          <VerificationBadge job={job} />
-                          <StatusPill status={job.status} review={!job.autoPublish} />
+                          {job.status === "done" ? <VerificationBadge job={job} /> : <StatusPill status={job.status} />}
+                          {job.status === "failed" && /sign in/i.test(job.error ?? "") && (
+                            <Button size="sm" onClick={() => act(() => api.loginAccount(job.accountId))}>
+                              {t("signIn")}
+                            </Button>
+                          )}
                           <div className="flex w-[100px] justify-end gap-0.5">
                             {openWindows.has(job.id) && (
                               <IconButton label={t("show")} onClick={() => act(() => api.showJob(job.id))}>
@@ -218,30 +232,50 @@ function RetryCountdown({ at }: { at: number }) {
   );
 }
 
+type Outcome = "running" | "published" | "unconfirmed" | "review" | "attention" | "failed" | "cancelled";
+
+/** One outcome per job, so a row never shows two contradicting states. */
+function outcomeOf(job: PublishJob): Outcome {
+  if (ACTIVE.includes(job.status)) return "running";
+  if (job.status === "failed") return "failed";
+  if (job.status === "cancelled") return "cancelled";
+  if (job.status === "attention") return "attention";
+  if (job.verification === "published" || job.verification === "likely") return "published";
+  if (!job.autoPublish) return "review";
+  return "unconfirmed";
+}
+
 function VerificationBadge({ job }: { job: PublishJob }) {
   const v = job.verification;
-  if (!v || (v === "pending" && !["done", "attention"].includes(job.status))) return null;
-  if (v === "unconfirmed" && job.status !== "done" && job.status !== "attention") return null;
-  if (v === "rejected") return null; // shown as the job's error
-  const styles: Record<string, string> = {
-    published: "bg-success/10 text-success",
-    likely: "bg-success/5 text-success",
-    unconfirmed: "bg-warning/10 text-warning",
-    pending: "bg-elevated text-muted",
-  };
-  const help = v === "unconfirmed" ? t("verifHelp_unconfirmed") : v === "likely" ? t("verifHelp_likely") : undefined;
+  let label: string;
+  let cls: string;
+  let icon: React.ReactNode = null;
+  let help: string | undefined;
+  if (v === "published") {
+    label = t("verif_published");
+    cls = "bg-success/10 text-success";
+    icon = <BadgeCheck size={12} />;
+  } else if (v === "likely") {
+    label = t("verif_likely");
+    cls = "bg-success/10 text-success";
+    icon = <CheckCircle2 size={12} />;
+    help = t("verifHelp_likely");
+  } else if (!job.autoPublish) {
+    label = t("jobFilled");
+    cls = "bg-elevated text-foreground/80";
+    icon = <CheckCircle2 size={12} />;
+  } else if (v === "pending") {
+    label = t("verif_pending");
+    cls = "bg-elevated text-muted";
+    icon = <Loader2 size={12} className="animate-spin" />;
+  } else {
+    label = t("verif_unconfirmed");
+    cls = "bg-warning/10 text-warning";
+    icon = <AlertTriangle size={12} />;
+    help = t("verifHelp_unconfirmed");
+  }
   return (
     <span className="flex shrink-0 items-center gap-1.5">
-      <span
-        title={help}
-        className={cx("inline-flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-medium", styles[v])}>
-        {v === "published" ? (
-          <BadgeCheck size={12} />
-        ) : v === "pending" ? (
-          <Loader2 size={12} className="animate-spin" />
-        ) : null}
-        {t(`verif_${v}` as MessageKey)}
-      </span>
       {job.postUrl && (
         <button
           type="button"
@@ -251,6 +285,12 @@ function VerificationBadge({ job }: { job: PublishJob }) {
           <ExternalLink size={11} />
         </button>
       )}
+      <span
+        title={help}
+        className={cx("inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium", cls)}>
+        {icon}
+        {label}
+      </span>
     </span>
   );
 }

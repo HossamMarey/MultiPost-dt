@@ -41,10 +41,14 @@ export function CustomizePanel({
   draft,
   patch,
   targets,
+  active,
+  setActive,
 }: {
   draft: Draft;
   patch: (p: Partial<Draft>) => void;
   targets: ResolvedTarget[];
+  active: string | null;
+  setActive: (platform: string) => void;
 }) {
   const { state, setView, sitesByKey } = useApp();
   const { toast } = useFeedback();
@@ -58,7 +62,6 @@ export function CustomizePanel({
     return [...seen.entries()];
   }, [targets]);
 
-  const [active, setActive] = useState<string | null>(null);
   const [scope, setScope] = useState<string>("all"); // "all" or an accountId
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);

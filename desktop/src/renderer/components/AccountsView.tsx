@@ -192,7 +192,15 @@ export function AccountsView({ groupId }: { groupId?: string }) {
 }
 
 function GroupSettingsModal({ group, onClose }: { group: Group; onClose: () => void }) {
-  const { toast } = useFeedback();
+  const { toast, confirm } = useFeedback();
+  const { setView } = useApp();
+  const remove = async () => {
+    if (await confirm(t("deleteGroupConfirm", { name: group.name }), { danger: true })) {
+      await api.deleteGroup(group.id);
+      onClose();
+      setView({ name: "accounts" });
+    }
+  };
   const [footer, setFooter] = useState(group.footer ?? "");
   const [hashtags, setHashtags] = useState<string[]>(group.hashtags ?? []);
   const save = async () => {
@@ -210,6 +218,9 @@ function GroupSettingsModal({ group, onClose }: { group: Group; onClose: () => v
       onClose={onClose}
       footer={
         <>
+          <Button variant="ghost" className="mr-auto text-danger" icon={<Trash2 size={14} />} onClick={remove}>
+            {t("deleteGroup")}
+          </Button>
           <Button onClick={onClose}>{t("cancel")}</Button>
           <Button variant="primary" onClick={save}>
             {t("save")}
@@ -236,7 +247,7 @@ function GroupSettingsModal({ group, onClose }: { group: Group; onClose: () => v
 function GroupHeader({ group }: { group: Group }) {
   const { setView } = useApp();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { confirm, toast } = useFeedback();
+  const { toast } = useFeedback();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(group.name);
   useEffect(() => setName(group.name), [group.name]);
@@ -275,16 +286,6 @@ function GroupHeader({ group }: { group: Group }) {
       {settingsOpen && <GroupSettingsModal group={group} onClose={() => setSettingsOpen(false)} />}
       <IconButton label={t("rename")} onClick={() => setEditing(true)}>
         <Pencil size={14} />
-      </IconButton>
-      <IconButton
-        label={t("delete")}
-        onClick={async () => {
-          if (await confirm(t("deleteGroupConfirm", { name: group.name }), { danger: true })) {
-            await api.deleteGroup(group.id);
-            setView({ name: "accounts" });
-          }
-        }}>
-        <Trash2 size={14} />
       </IconButton>
     </div>
   );
