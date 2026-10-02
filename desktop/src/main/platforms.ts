@@ -16,6 +16,23 @@ export const infoMap: Record<string, PlatformInfo> = {
   ...PodcastInfoMap,
 };
 
+/**
+ * Video through a post: Facebook, Instagram (Reels), X, LinkedIn, Threads… have no dedicated video page in
+ * the extension, but their post scripts upload videos. Each such post platform also appears under VIDEO
+ * (as VIDEO_<SITE>) and publishes the video through the post script. Sites with a real video script keep it.
+ */
+export const VIDEO_VIA_POST: Record<string, string> = {}; // VIDEO_<SITE> -> DYNAMIC_<SITE>
+{
+  const sitesWithVideo = new Set(Object.values(VideoInfoMap).map((p) => p.accountKey));
+  for (const post of Object.values(DynamicInfoMap)) {
+    if (sitesWithVideo.has(post.accountKey) || !/\bvideos\b/.test(post.injectFunction.toString())) continue;
+    const name = post.name.replace(/^DYNAMIC_/, "VIDEO_");
+    if (infoMap[name]) continue;
+    infoMap[name] = { ...post, type: "VIDEO", name };
+    VIDEO_VIA_POST[name] = post.name;
+  }
+}
+
 export function getPlatformInfo(name: string): PlatformInfo | undefined {
   return infoMap[name];
 }

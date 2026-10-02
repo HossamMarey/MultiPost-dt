@@ -61,6 +61,15 @@ export const PLATFORM_RULES: Record<string, PlatformRules> = {
     imagesMax: 20,
     mediaRequired: true,
   },
+  // Instagram turns video posts into Reels, which are vertical.
+  VIDEO_INSTAGRAM: {
+    textMax: 2200,
+    strict: true,
+    countTitleInText: true,
+    tagsInText: true,
+    tagsMax: 30,
+    preferVertical: true,
+  },
   DYNAMIC_FACEBOOK: { textMax: 63206, countTitleInText: true, tagsInText: true },
   DYNAMIC_LINKEDIN: { textMax: 3000, countTitleInText: true, tagsInText: true },
   DYNAMIC_REDDIT: { titleRequired: true, titleMax: 300 },
@@ -104,7 +113,9 @@ const GENERIC_BY_TYPE: Record<ContentType, PlatformRules> = {
 };
 
 export function rulesFor(platform: string, type: ContentType): PlatformRules {
-  return { ...GENERIC_BY_TYPE[type], ...(PLATFORM_RULES[platform] ?? {}) };
+  // Videos published through a post page (VIDEO_FACEBOOK, VIDEO_INSTAGRAM…) follow that post's limits.
+  const own = PLATFORM_RULES[platform] ?? PLATFORM_RULES[platform.replace(/^VIDEO_/, "DYNAMIC_")] ?? {};
+  return { ...GENERIC_BY_TYPE[type], ...own };
 }
 
 export type IssueCode =

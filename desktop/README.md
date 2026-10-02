@@ -7,7 +7,7 @@ A Windows desktop app (Electron) for publishing to many social media accounts at
 - **Many accounts per site.** Every account gets its own persistent Chromium profile, so cookies, logins and storage never mix. Ten X accounts can sit next to ten Bilibili accounts.
 - **Groups.** Put accounts into groups such as "International", "China" or "Launch day", then select a whole group in the composer with one click. An account can belong to several groups.
 - **Local only.** Accounts, groups, history and sign-ins stay on this computer, under `%APPDATA%\MultiPost Desktop`.
-- **One composer, four content types.** Post (text + images/videos), Article (Markdown), Video and Podcast.
+- **One composer, four content types.** Post (text + images/videos), Article (Markdown), Video and Podcast. Facebook, Instagram (as a Reel), X, LinkedIn, Threads and Reddit appear under Video too; their video goes through the site's own post page.
 - **Parallel publishing.** Each target opens its publish page in that account's own browser window and fills it in. With **Auto-submit** on, the app also presses the platform's publish button. With it off, you review each window and publish yourself.
 - **Honest results.** The Activity page shows each target's status, live. It reports failures when a page crashes, hangs, or redirects to a login page, and those accounts are marked as signed out. You can retry a single target or every failed one.
 - **Looks like Chrome.** The app sends a standard Chrome user agent and Chrome client hints, and each account can use its own proxy (`http://user:pass@host:port`, `socks5://host:port`).

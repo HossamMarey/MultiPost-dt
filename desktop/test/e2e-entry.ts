@@ -1,7 +1,7 @@
 // Test build of the main process: the real app plus a fake platform served from localhost.
 import "../src/main/index";
 import { createAccountWindow } from "../src/main/browser-windows";
-import { infoMap } from "../src/main/platforms";
+import { VIDEO_VIA_POST, infoMap, listPlatforms } from "../src/main/platforms";
 import { preflight } from "../src/main/preflight";
 import { cancelJob, retryJob, startPublish } from "../src/main/publisher";
 import { markScriptless } from "../src/main/sessions";
@@ -9,12 +9,13 @@ import { flush, getState, publicState, update } from "../src/main/store";
 
 // Self-contained like every real inject function.
 async function e2eInject(data: {
-  data: { content: string; images: { url: string; name: string }[] };
+  data: { content: string; images: { url: string; name: string }[]; videos?: { url: string; name: string }[] };
   isAutoPublish: boolean;
 }) {
   const box = document.querySelector("#editor") as HTMLTextAreaElement;
   box.value = data.data.content;
-  const blobs = await Promise.all(data.data.images.map(async (img) => (await fetch(img.url)).blob()));
+  const files = [...data.data.images, ...(data.data.videos ?? [])];
+  const blobs = await Promise.all(files.map(async (f) => (await fetch(f.url)).blob()));
   const sizes = blobs.map((b) => b.size).join(",");
   // Proves we ran isolated from the page: the page replaced window.fetch with a function that throws.
   document.body.setAttribute("data-result", `ok:${sizes}:${navigator.userAgent}`);
@@ -49,6 +50,10 @@ for (const [name, injectUrl, fn] of [
   infoMap[name] = { ...infoMap.DYNAMIC_E2E, name, injectUrl, injectFunction: fn as never, platformName: name };
 }
 
+// A video published through the E2E post page, like VIDEO_FACEBOOK goes through DYNAMIC_FACEBOOK.
+infoMap.VIDEO_E2E = { ...infoMap.DYNAMIC_E2E, type: "VIDEO", name: "VIDEO_E2E" };
+VIDEO_VIA_POST.VIDEO_E2E = "DYNAMIC_E2E";
+
 (globalThis as Record<string, unknown>).__mp = {
   startPublish,
   getState,
@@ -60,4 +65,5 @@ for (const [name, injectUrl, fn] of [
   markScriptless,
   preflight,
   publicState,
+  listPlatforms,
 };
