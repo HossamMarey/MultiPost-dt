@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Check,
   FileAudio,
   FileText,
@@ -8,16 +9,20 @@ import {
   Mic,
   PenLine,
   Send,
+  ShieldCheck,
   Trash2,
   Upload,
   Video,
   X,
+  XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Account, ContentType, Draft, LocalFile, PlatformMeta } from "../../shared/types";
+import type { Account, ContentType, Draft, LocalFile, PlatformMeta, PreflightReport } from "../../shared/types";
 import { api, errorMessage, fileUrl, formatBytes } from "../api";
+import { type ResolvedTarget, issueText, splitKey, useResolvedTargets, withMediaMeta } from "../compose-logic";
 import { useApp } from "../context";
-import { t } from "../i18n";
+import { type MessageKey, t } from "../i18n";
+import { CustomizePanel, worstLevel } from "./CustomizePanel";
 import { Button, Checkbox, Favicon, Toggle, cx, useFeedback } from "./ui";
 
 const DRAFT_KEY = "multipost.draft.v1";
@@ -71,6 +76,7 @@ export function ComposeView() {
   const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
   const targets = targetsByType[draft.contentType] ?? [];
   const setTargets = (list: string[]) => setTargetsByType((m) => ({ ...m, [draft.contentType]: list }));
+  const resolved = useResolvedTargets(draft, targets);
 
   return (
     <div className="flex h-full">
@@ -105,11 +111,13 @@ export function ComposeView() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
             <Editor draft={draft} patch={patch} />
+            <CustomizePanel draft={draft} patch={patch} targets={resolved} />
           </div>
         </div>
       </section>
       <TargetsPanel
         draft={draft}
+        resolved={resolved}
         targets={targets}
         setTargets={setTargets}
         autoPublish={autoPublish}
@@ -365,9 +373,9 @@ function MediaGrid({
   addLabel: string;
   icon: React.ReactNode;
 }) {
-  const add = (more: LocalFile[]) => {
+  const add = async (more: LocalFile[]) => {
     const fitting = more.filter((f) => f.type.startsWith(KIND_PREFIX[kind]) && !files.some((x) => x.path === f.path));
-    if (fitting.length) onChange([...files, ...fitting]);
+    if (fitting.length) onChange([...files, ...(await Promise.all(fitting.map(withMediaMeta)))]);
   };
   const drop = useFileDrop(add);
   const pick = async () => add(await api.pickFiles(kind, true));
@@ -431,9 +439,9 @@ function SingleFile({
   icon: React.ReactNode;
   tall?: boolean;
 }) {
-  const accept = (list: LocalFile[]) => {
+  const accept = async (list: LocalFile[]) => {
     const f = list.find((x) => x.type.startsWith(KIND_PREFIX[kind]));
-    if (f) onChange(f);
+    if (f) onChange(await withMediaMeta(f));
   };
   const drop = useFileDrop(accept);
   const pick = async () => accept(await api.pickFiles(kind, false));
@@ -492,7 +500,11 @@ function SingleFile({
   );
 }
 
-function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+export function TagInput({
+  tags,
+  onChange,
+  placeholder,
+}: { tags: string[]; onChange: (tags: string[]) => void; placeholder?: string }) {
   const [value, setValue] = useState("");
   const commit = () => {
     const parts = value
@@ -518,7 +530,7 @@ function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[
         ))}
         <input
           className="min-w-[160px] flex-1 bg-transparent py-0.5 outline-none placeholder:text-muted/70"
-          placeholder={tags.length ? "" : t("tagsPlaceholder")}
+          placeholder={tags.length ? "" : (placeholder ?? t("tagsPlaceholder"))}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onBlur={commit}
@@ -545,20 +557,29 @@ interface TargetRow {
 
 function TargetsPanel({
   draft,
+  resolved,
   targets,
   setTargets,
   autoPublish,
   setAutoPublish,
 }: {
   draft: Draft;
+  resolved: ResolvedTarget[];
   targets: string[];
   setTargets: (t: string[]) => void;
   autoPublish: boolean;
   setAutoPublish: (v: boolean) => void;
 }) {
   const { state, sitesByKey, platformsFor, setView } = useApp();
-  const { toast } = useFeedback();
+  const { toast, confirm } = useFeedback();
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checks, setChecks] = useState<Record<string, PreflightReport>>({});
+  const issuesByAccount = useMemo(() => {
+    const m = new Map<string, ResolvedTarget["issues"]>();
+    for (const r of resolved) m.set(r.account.id, [...(m.get(r.account.id) ?? []), ...r.issues]);
+    return m;
+  }, [resolved]);
 
   const rows: TargetRow[] = useMemo(
     () =>
@@ -604,9 +625,42 @@ function TargetsPanel({
       .filter((id) => state.accounts.find((a) => a.id === id)?.status === "logged-out"),
   ).size;
 
+  const toTargets = (keys: string[]) => keys.map((k) => splitKey(k));
+
+  const runChecks = async () => {
+    if (!selected.length) {
+      toast(t("selectTargets"), "error");
+      return;
+    }
+    setChecking(true);
+    try {
+      const reports: PreflightReport[] = await api.preflight(toTargets(selected));
+      const next: Record<string, PreflightReport> = {};
+      for (const r of reports) next[`${r.accountId}:${r.platform}`] = r;
+      setChecks(next);
+      const bad = reports.filter((r) => r.result !== "ok").length;
+      toast(
+        bad ? t("checksProblems", { n: bad, total: reports.length }) : t("checksAllOk", { n: reports.length }),
+        bad ? "error" : "success",
+      );
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const errorTargets = resolved.filter((r) => r.issues.some((i) => i.level === "error")).length;
+
   const publish = async () => {
     if (!selected.length) {
       toast(t("selectTargets"), "error");
+      return;
+    }
+    if (
+      errorTargets > 0 &&
+      !(await confirm(t("publishWithProblems", { n: errorTargets }), { confirmLabel: t("publishAnyway") }))
+    ) {
       return;
     }
     setBusy(true);
@@ -614,10 +668,7 @@ function TargetsPanel({
       await api.publish({
         draft,
         autoPublish,
-        targets: selected.map((k) => {
-          const i = k.indexOf(":");
-          return { accountId: k.slice(0, i), platform: k.slice(i + 1) };
-        }),
+        targets: toTargets(selected),
       });
       toast(t("publishStarted", { n: selected.length }), "success");
       setView({ name: "activity" });
@@ -723,13 +774,14 @@ function TargetsPanel({
                         {account.profile?.username && ` · @${account.profile.username.replace(/^@/, "")}`}
                       </span>
                     </div>
-                    {account.status === "logged-out" && (
-                      <span
-                        className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning"
-                        title={t("notSignedInDot")}>
-                        {t("statusLoggedOut")}
-                      </span>
-                    )}
+                    <RowBadges
+                      issues={keys.some((k) => selectedSet.has(k)) ? (issuesByAccount.get(account.id) ?? []) : []}
+                      check={
+                        keys.map((k) => checks[k]).find((c) => c && c.result !== "ok") ??
+                        keys.map((k) => checks[k]).find(Boolean)
+                      }
+                      loggedOut={account.status === "logged-out"}
+                    />
                   </label>
                   {platforms.length > 1 && (
                     <div className="flex flex-col pb-1 pl-[52px]">
@@ -761,6 +813,16 @@ function TargetsPanel({
             <span className="text-xs leading-snug text-muted">{t("autoPublishHint")}</span>
           </div>
         </label>
+        {selected.length > 0 && (
+          <Button size="sm" onClick={runChecks} disabled={checking} icon={<ShieldCheck size={14} />}>
+            {checking ? t("checkingTargets") : t("checkTargets")}
+          </Button>
+        )}
+        {errorTargets > 0 && (
+          <div className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">
+            {t("targetsWithErrors", { n: errorTargets })}
+          </div>
+        )}
         {notSignedIn > 0 && (
           <div className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
             {t("notSignedInWarn", { n: notSignedIn })}
@@ -776,5 +838,51 @@ function TargetsPanel({
         </Button>
       </div>
     </aside>
+  );
+}
+
+function RowBadges({
+  issues,
+  check,
+  loggedOut,
+}: { issues: ResolvedTarget["issues"]; check?: PreflightReport; loggedOut: boolean }) {
+  const level = worstLevel(issues);
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {check && (
+        <span
+          title={
+            check.detail
+              ? `${t(`check_${check.result}` as MessageKey)} — ${check.detail}`
+              : t(`check_${check.result}` as MessageKey)
+          }
+          className={cx(
+            "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+            check.result === "ok" ? "bg-success/10 text-success" : "bg-danger/10 text-danger",
+          )}>
+          {t(`check_${check.result}` as MessageKey)}
+        </span>
+      )}
+      {level && level !== "info" && (
+        <span
+          title={issues
+            .filter((i) => i.level !== "info")
+            .map(issueText)
+            .join("\n")}>
+          {level === "error" ? (
+            <XCircle size={14} className="text-danger" />
+          ) : (
+            <AlertTriangle size={14} className="text-warning" />
+          )}
+        </span>
+      )}
+      {loggedOut && !check && (
+        <span
+          className="rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning"
+          title={t("notSignedInDot")}>
+          {t("statusLoggedOut")}
+        </span>
+      )}
+    </div>
   );
 }

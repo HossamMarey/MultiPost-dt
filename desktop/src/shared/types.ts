@@ -30,6 +30,8 @@ export interface Group {
   color: string;
   accountIds: string[];
   createdAt: number;
+  footer?: string; // appended to the text of every post from accounts in this group
+  hashtags?: string[]; // added to the tags of every post from accounts in this group
 }
 
 export interface AccountProfile {
@@ -51,6 +53,8 @@ export interface Account {
   profile?: AccountProfile;
   status: "unknown" | "logged-in" | "logged-out";
   notes?: string;
+  timezone?: string; // IANA zone the account's pages see, e.g. "America/New_York" (match the proxy's location)
+  locale?: string; // e.g. "en-US"; also drives Accept-Language
   createdAt: number;
 }
 
@@ -61,6 +65,8 @@ export interface Settings {
   showPublishWindows: boolean;
   pageTimeoutSec: number;
   maxOpenWindows: number; // publish windows kept open at once (finished ones included)
+  autoRetry: boolean; // retry jobs whose page failed to load because of the network
+  aiApiKey?: string; // Anthropic API key for "Rewrite with AI" (encrypted at rest)
   language: "en" | "zh_CN";
   theme: "system" | "light" | "dark";
 }
@@ -70,6 +76,18 @@ export interface LocalFile {
   name: string;
   size: number;
   type: string;
+  // Read by the UI when the file is attached; used for platform checks.
+  width?: number;
+  height?: number;
+  durationSec?: number;
+}
+
+/** Per-platform or per-account replacements for the main draft text. Empty fields fall back. */
+export interface ContentOverride {
+  title?: string;
+  content?: string;
+  tags?: string[];
+  cover?: LocalFile;
 }
 
 export interface Draft {
@@ -86,6 +104,9 @@ export interface Draft {
   audio?: LocalFile;
   cover?: LocalFile;
   scheduledPublishTime?: number;
+  // Keys: "platform:<PLATFORM_NAME>" or "account:<accountId>". Account overrides win over platform ones.
+  overrides?: Record<string, ContentOverride>;
+  varyTags?: boolean; // shuffle hashtag order per account so identical posts don't look duplicated
 }
 
 export interface PublishTarget {
@@ -116,6 +137,11 @@ export interface PublishJob {
   url?: string;
   attempts: number;
   autoPublish?: boolean;
+  // What the platform itself answered, watched on the network while the window is open.
+  verification?: "pending" | "published" | "likely" | "rejected" | "unconfirmed";
+  verificationNote?: string;
+  postUrl?: string;
+  retryAt?: number; // automatic retry scheduled after a network error
 }
 
 export interface PublishRun {
@@ -124,6 +150,15 @@ export interface PublishRun {
   title: string;
   contentType: ContentType;
   jobIds: string[];
+}
+
+export type PreflightResult = "ok" | "signed-out" | "page-changed" | "load-failed";
+
+export interface PreflightReport {
+  accountId: string;
+  platform: string;
+  result: PreflightResult;
+  detail?: string;
 }
 
 export interface AppState {
@@ -142,6 +177,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showPublishWindows: true,
   pageTimeoutSec: 60,
   maxOpenWindows: 8,
+  autoRetry: true,
   language: "en",
   theme: "system",
 };

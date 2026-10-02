@@ -1,5 +1,5 @@
 import { Download, FolderOpen, Upload } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { Settings } from "../../shared/types";
 import { api, errorMessage } from "../api";
 import { useApp } from "../context";
@@ -102,6 +102,13 @@ export function SettingsView() {
           <Row title={t("closeOnSuccess")}>
             <Toggle checked={s.closeWindowsOnSuccess} onChange={(v) => set({ closeWindowsOnSuccess: v })} />
           </Row>
+          <Row title={t("autoRetry")} hint={t("autoRetryHint")}>
+            <Toggle checked={s.autoRetry} onChange={(v) => set({ autoRetry: v })} />
+          </Row>
+        </Card>
+
+        <Card title={t("settingsAi")}>
+          <AiKeyRow current={s.aiApiKey} onSave={(aiApiKey) => set({ aiApiKey })} />
         </Card>
 
         <Card title={t("settingsAppearance")}>
@@ -176,6 +183,34 @@ export function SettingsView() {
           </Row>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function AiKeyRow({ current, onSave }: { current?: string; onSave: (key: string) => void }) {
+  const [value, setValue] = useState(current ?? "");
+  useEffect(() => setValue(current ?? ""), [current]);
+  const dirty = value !== (current ?? "");
+  return (
+    <div className="flex flex-col gap-2 px-5 py-4">
+      <span className="font-medium">{t("aiKey")}</span>
+      <div className="flex gap-2">
+        <input
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          className="field font-mono text-xs"
+          placeholder={t("aiKeyPlaceholder")}
+          value={value}
+          onFocus={() => value === current && current && setValue("")}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <Button variant="primary" disabled={!dirty} onClick={() => onSave(value)}>
+          {t("save")}
+        </Button>
+        {current && <Button onClick={() => onSave("")}>{t("remove")}</Button>}
+      </div>
+      <span className="text-xs text-muted">{t("aiKeyHint")}</span>
     </div>
   );
 }

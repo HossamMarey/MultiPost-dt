@@ -22,6 +22,7 @@ const imageSize = fs.statSync(imagePath).size;
 
 let submitted = 0;
 let lastSecChUa = "";
+let lastAcceptLanguage = "";
 let port = 0;
 const server = http.createServer((req, res) => {
   if (req.url.startsWith("/done")) {
@@ -44,21 +45,52 @@ const server = http.createServer((req, res) => {
     res.end("<title>login</title>please sign in");
     return;
   }
+  if (req.url.startsWith("/i/api/graphql/")) {
+    // Mimics X's CreateTweet answer (success) or its error shape (?reject=1).
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify(
+        req.url.includes("reject=1")
+          ? { errors: [{ message: "Status is a duplicate." }] }
+          : { data: { create_tweet: { tweet_results: { result: { rest_id: "1234567890" } } } } },
+      ),
+    );
+    return;
+  }
   lastSecChUa = req.headers["sec-ch-ua"] ?? lastSecChUa;
+  lastAcceptLanguage = req.headers["accept-language"] ?? lastAcceptLanguage;
+  const reject = req.url.startsWith("/compose-reject");
   res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self'");
   res.setHeader("Content-Type", "text/html");
   res.end(`<!doctype html><title>compose</title>
 <script>window.fetch = () => { throw new Error("page fetch hijacked"); };</script>
-<form action="/done" method="get"><textarea id="editor"></textarea><button id="submit" type="submit">Post</button></form>`);
+<textarea id="editor"></textarea><button id="submit" type="button">Post</button>
+<script>
+document.getElementById("submit").addEventListener("click", () => {
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/i/api/graphql/abc123/CreateTweet${reject ? "?reject=1" : ""}");
+  xhr.setRequestHeader("Content-Type", "application/json");
+  xhr.onload = () => { setTimeout(() => { location.href = "/done"; }, 300); };
+  xhr.send(JSON.stringify({ text: document.getElementById("editor").value }));
+});
+</script>`);
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 port = server.address().port;
 const url = `http://127.0.0.1:${port}/compose`;
+// A port that was free a moment ago: connecting to it is refused (a transient network error).
+const downUrl = await new Promise((resolve) => {
+  const tmpServer = http.createServer();
+  tmpServer.listen(0, "127.0.0.1", () => {
+    const p = tmpServer.address().port;
+    tmpServer.close(() => resolve(`http://127.0.0.1:${p}/compose`));
+  });
+});
 
 const app = await electron.launch({
   executablePath: electronPath,
   args: [mainScript, "--no-sandbox"],
-  env: { ...process.env, MULTIPOST_USER_DATA: userData, E2E_URL: url },
+  env: { ...process.env, MULTIPOST_USER_DATA: userData, E2E_URL: url, E2E_DOWN_URL: downUrl },
 });
 const failures = [];
 const check = (cond, msg) => {
@@ -82,7 +114,7 @@ const publish = (targets, autoPublish, content) =>
 const jobsOf = (runId) =>
   app.evaluate(({}, runId) => {
     const s = globalThis.__mp.getState();
-    return s.jobs.filter((j) => j.runId === runId).map((j) => ({ id: j.id, status: j.status, error: j.error }));
+    return s.jobs.filter((j) => j.runId === runId).map((j) => ({ id: j.id, status: j.status, error: j.error, attempts: j.attempts, verification: j.verification }));
   }, runId);
 async function waitJobs(runId, done, timeoutMs = 30000) {
   const end = Date.now() + timeoutMs;
@@ -228,7 +260,100 @@ try {
   }, url);
   check(bridge === "no-window" || bridge === "undefined:undefined:undefined", `account pages get no app bridge (${bridge})`);
 
-  // 10. A second app instance must exit without touching the data file
+  // Reset what the window-cap test changed.
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.getURL().startsWith("file:")) w.destroy();
+    globalThis.__mp.update((s) => {
+      s.settings.maxOpenWindows = 8;
+    });
+  });
+
+  // 10. Confirmation from the platform's own answer: published + link, and rejection
+  const verified = await app.evaluate(({}) =>
+    globalThis.__mp.getState().jobs.filter((j) => j.platform === "DYNAMIC_E2E" && j.autoPublish).map((j) => [j.verification, j.postUrl]),
+  );
+  check(
+    verified.length >= 2 && verified.every(([v, u]) => v === "published" && u === "https://x.com/i/web/status/1234567890"),
+    `auto-submitted posts confirmed with a link (${JSON.stringify(verified[0])})`,
+  );
+  run = await publish([{ accountId: ids[0], platform: "DYNAMIC_E2E_REJECT" }], true, "Duplicate");
+  jobs = await waitJobs(run, (j) => j[0]?.status === "failed" || j[0]?.verification === "rejected", 20000);
+  const rej = (await app.evaluate(({}, r) => globalThis.__mp.getState().jobs.find((j) => j.runId === r), run));
+  check(rej?.status === "failed" && /duplicate/i.test(rej?.error ?? ""), `platform rejection fails the job (${rej?.status}: ${rej?.error})`);
+
+  // 11. Per-account text: platform override + account override + group footer + template variables
+  await app.evaluate(({}, ids) => {
+    globalThis.__mp.update((s) => {
+      s.groups.push({ id: "g-e2e", name: "E2E", color: "#6366f1", accountIds: [ids[0], ids[1]], createdAt: Date.now(), footer: "-- sent by {account}", hashtags: ["grouptag"] });
+    });
+  }, ids);
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.getURL().startsWith("file:")) w.destroy();
+  });
+  const customRun = await app.evaluate(({}, { ids, imagePath, imageSize }) =>
+    globalThis.__mp.startPublish({
+      autoPublish: false,
+      targets: ids.map((accountId) => ({ accountId, platform: "DYNAMIC_E2E" })),
+      draft: {
+        contentType: "DYNAMIC", title: "", content: "Main text", digest: "", htmlContent: "", markdownContent: "", tags: [],
+        images: [{ path: imagePath, name: "photo one.png", size: imageSize, type: "image/png" }], videos: [],
+        overrides: {
+          "platform:DYNAMIC_E2E": { content: "Hello from {account}" },
+          [`account:${ids[1]}`]: { content: "Special text for B" },
+        },
+      },
+    }), { ids, imagePath, imageSize });
+  await waitJobs(customRun, finished);
+  const editors = await app.evaluate(async ({ BrowserWindow }) => {
+    const out = [];
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents.getURL().startsWith("file:")) continue;
+      out.push(await w.webContents.executeJavaScript('document.querySelector("#editor") ? document.querySelector("#editor").value : ""'));
+    }
+    return out.sort();
+  });
+  check(
+    editors.includes("Hello from Brand A\n\n-- sent by Brand A") && editors.includes("Special text for B\n\n-- sent by Brand B"),
+    `per-platform/per-account text with group footer (${JSON.stringify(editors)})`,
+  );
+
+  // 12. Pre-publish check: ready page vs. login redirect
+  const reports = await app.evaluate(({}, ids) =>
+    globalThis.__mp.preflight([
+      { accountId: ids[0], platform: "DYNAMIC_E2E" },
+      { accountId: ids[0], platform: "DYNAMIC_E2E_LOGIN" },
+    ]), ids);
+  const byPlatform = Object.fromEntries(reports.map((r) => [r.platform, r.result]));
+  check(byPlatform.DYNAMIC_E2E === "ok" && byPlatform.DYNAMIC_E2E_LOGIN === "signed-out", `target check (${JSON.stringify(byPlatform)})`);
+
+  // 13. Network failure on load: retried automatically (nothing was submitted)
+  run = await publish([{ accountId: ids[0], platform: "DYNAMIC_E2E_DOWN" }], true, "Retry");
+  jobs = await waitJobs(run, (j) => j[0]?.status === "queued" && j[0]?.attempts >= 1, 15000);
+  const retrying = await app.evaluate(({}, r) => globalThis.__mp.getState().jobs.find((j) => j.runId === r), run);
+  check(retrying?.status === "queued" && !!retrying?.retryAt && /Retrying/.test(retrying?.error ?? ""), `network failure scheduled for retry (${retrying?.status}, ${retrying?.error})`);
+  await app.evaluate(({}, id) => globalThis.__mp.cancelJob(id), retrying?.id);
+
+  // 14. Per-account timezone and language reach the pages
+  await app.evaluate(({}, id) => {
+    globalThis.__mp.update((s) => {
+      const a = s.accounts.find((x) => x.id === id);
+      a.timezone = "Asia/Tokyo";
+      a.locale = "ja-JP";
+    });
+  }, ids[1]);
+  const tz = await app.evaluate(async ({}, { id, url }) => {
+    const mp = globalThis.__mp;
+    const account = mp.getState().accounts.find((a) => a.id === id);
+    const win = await mp.createAccountWindow(account, { title: "tz", show: false });
+    await win.loadURL(url);
+    const r = await win.webContents.executeJavaScript("Intl.DateTimeFormat().resolvedOptions().timeZone + '|' + new Date().getTimezoneOffset()");
+    win.destroy();
+    return r;
+  }, { id: ids[1], url });
+  check(tz === "Asia/Tokyo|-540", `account timezone applied to pages (${tz})`);
+  check(/^ja-JP/.test(lastAcceptLanguage), `account language sent as Accept-Language (${lastAcceptLanguage})`);
+
+  // 15. A second app instance must exit without touching the data file
   await sleep(600); // let the debounced save land
   const before = fs.readFileSync(path.join(userData, "multipost-data.json"), "utf8");
   const second = spawnSync(electronPath, [mainScript, "--no-sandbox"], {

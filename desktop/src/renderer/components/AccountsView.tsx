@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Search,
   Shield,
+  SlidersHorizontal,
   Trash2,
   UserPlus,
   Users,
@@ -18,6 +19,7 @@ import { GROUP_COLORS } from "../../shared/types";
 import { api, errorMessage } from "../api";
 import { useApp } from "../context";
 import { t, timeAgo } from "../i18n";
+import { TagInput } from "./ComposeView";
 import { Button, Checkbox, EmptyState, Favicon, Field, IconButton, Modal, cx, useFeedback } from "./ui";
 
 export function AccountsView({ groupId }: { groupId?: string }) {
@@ -189,8 +191,51 @@ export function AccountsView({ groupId }: { groupId?: string }) {
   );
 }
 
+function GroupSettingsModal({ group, onClose }: { group: Group; onClose: () => void }) {
+  const { toast } = useFeedback();
+  const [footer, setFooter] = useState(group.footer ?? "");
+  const [hashtags, setHashtags] = useState<string[]>(group.hashtags ?? []);
+  const save = async () => {
+    try {
+      await api.updateGroup(group.id, { footer, hashtags });
+      onClose();
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    }
+  };
+  return (
+    <Modal
+      open
+      title={`${t("groupSettings")} · ${group.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>{t("cancel")}</Button>
+          <Button variant="primary" onClick={save}>
+            {t("save")}
+          </Button>
+        </>
+      }>
+      <div className="flex flex-col gap-4">
+        <Field label={t("groupFooter")} hint={t("groupFooterHint")}>
+          <textarea
+            className="field min-h-[90px] resize-y"
+            placeholder="— Follow {account} for more"
+            value={footer}
+            onChange={(e) => setFooter(e.target.value)}
+          />
+        </Field>
+        <Field label={t("groupHashtags")}>
+          <TagInput tags={hashtags} onChange={setHashtags} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
 function GroupHeader({ group }: { group: Group }) {
   const { setView } = useApp();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { confirm, toast } = useFeedback();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(group.name);
@@ -224,6 +269,10 @@ function GroupHeader({ group }: { group: Group }) {
       ) : (
         <h1 className="text-lg font-semibold">{group.name}</h1>
       )}
+      <IconButton label={t("groupSettings")} onClick={() => setSettingsOpen(true)}>
+        <SlidersHorizontal size={14} />
+      </IconButton>
+      {settingsOpen && <GroupSettingsModal group={group} onClose={() => setSettingsOpen(false)} />}
       <IconButton label={t("rename")} onClick={() => setEditing(true)}>
         <Pencil size={14} />
       </IconButton>
@@ -671,6 +720,14 @@ function GroupChips({ value, onChange }: { value: string[]; onChange: (ids: stri
   );
 }
 
+function timezones(): string[] {
+  try {
+    return (Intl as unknown as { supportedValuesOf: (k: string) => string[] }).supportedValuesOf("timeZone");
+  } catch {
+    return [];
+  }
+}
+
 function EditAccountModal({ account, onClose }: { account: Account; onClose: () => void }) {
   const { state, sitesByKey } = useApp();
   const { toast } = useFeedback();
@@ -679,6 +736,24 @@ function EditAccountModal({ account, onClose }: { account: Account; onClose: () 
   const [proxy, setProxy] = useState(account.proxy ?? "");
   const [userAgent, setUserAgent] = useState(account.userAgent ?? "");
   const [notes, setNotes] = useState(account.notes ?? "");
+  const [timezone, setTimezone] = useState(account.timezone ?? "");
+  const [locale, setLocale] = useState(account.locale ?? "");
+  const [detecting, setDetecting] = useState(false);
+
+  const matchProxy = async () => {
+    setDetecting(true);
+    try {
+      await api.updateAccount(account.id, { proxy: proxy.trim() || undefined });
+      const r = await api.detectRegion(account.id);
+      setTimezone(r.timezone);
+      setLocale(r.locale);
+      toast(t("regionDetected", r), "success");
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    } finally {
+      setDetecting(false);
+    }
+  };
   const [extra, setExtra] = useState(account.extraConfig ? JSON.stringify(account.extraConfig, null, 2) : "");
   const [groupIds, setGroupIds] = useState(
     state.groups.filter((g) => g.accountIds.includes(account.id)).map((g) => g.id),
@@ -702,6 +777,8 @@ function EditAccountModal({ account, onClose }: { account: Account; onClose: () 
         userAgent: userAgent.trim() || undefined,
         notes,
         extraConfig,
+        timezone: timezone.trim() || undefined,
+        locale: locale.trim() || undefined,
       });
       await api.setAccountGroups(account.id, groupIds);
       onClose();
@@ -745,6 +822,36 @@ function EditAccountModal({ account, onClose }: { account: Account; onClose: () 
             onChange={(e) => setProxy(e.target.value)}
           />
         </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label={t("timezone")} hint={t("timezoneHint")}>
+            <input
+              className="field font-mono text-xs"
+              list="mp-timezones"
+              placeholder="America/New_York"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            />
+          </Field>
+          <Field label={t("locale")} hint={t("localeHint")}>
+            <input
+              className="field font-mono text-xs"
+              placeholder="en-US"
+              value={locale}
+              onChange={(e) => setLocale(e.target.value)}
+            />
+          </Field>
+        </div>
+        <datalist id="mp-timezones">
+          {timezones().map((z) => (
+            <option key={z} value={z} />
+          ))}
+        </datalist>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={matchProxy} disabled={detecting} icon={<Globe size={13} />}>
+            {t("matchProxy")}
+          </Button>
+          <span className="text-[11px] text-muted">{t("matchProxyHint")}</span>
+        </div>
         <Field label={t("notes")}>
           <textarea className="field min-h-[60px] resize-y" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>

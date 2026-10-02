@@ -2,6 +2,7 @@
 import path from "node:path";
 import { BrowserWindow, type BrowserWindowConstructorOptions, shell } from "electron";
 import type { Account } from "../shared/types";
+import { instrument } from "./cdp";
 import { sessionForAccount } from "./sessions";
 
 const ICON = path.join(__dirname, "icon.png");
@@ -34,7 +35,12 @@ export async function createAccountWindow(
   // Never let WebRTC reveal the real IP behind an account's proxy (or link accounts by LAN IP).
   const rtcPolicy = account.proxy?.trim() ? "disable_non_proxied_udp" : "default_public_interface_only";
   win.webContents.setWebRTCIPHandlingPolicy(rtcPolicy);
-  win.webContents.on("did-create-window", (child) => child.webContents.setWebRTCIPHandlingPolicy(rtcPolicy));
+  // Same timezone/locale in every page and popup of this account (matching its proxy's location).
+  instrument(win.webContents, account);
+  win.webContents.on("did-create-window", (child) => {
+    child.webContents.setWebRTCIPHandlingPolicy(rtcPolicy);
+    instrument(child.webContents, account);
+  });
   win.on("page-title-updated", (event, pageTitle) => {
     event.preventDefault();
     win.setTitle(`${opts.title} — ${pageTitle}`);

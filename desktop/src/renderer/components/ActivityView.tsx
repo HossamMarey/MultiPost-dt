@@ -1,7 +1,9 @@
 import {
   AlertTriangle,
+  BadgeCheck,
   CheckCircle2,
   Clock,
+  ExternalLink,
   Eye,
   Loader2,
   RotateCcw,
@@ -14,7 +16,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { JobStatus, PublishJob } from "../../shared/types";
 import { api, errorMessage } from "../api";
 import { useApp } from "../context";
-import { t, timeAgo } from "../i18n";
+import { type MessageKey, t, timeAgo } from "../i18n";
 import { Button, EmptyState, Favicon, IconButton, cx, useFeedback } from "./ui";
 
 const ACTIVE: JobStatus[] = ["queued", "loading", "injecting"];
@@ -153,9 +155,10 @@ export function ActivityView() {
                               <span className="font-medium">{account?.label ?? job.accountLabel}</span>
                               <span className="text-muted"> · {job.platformName}</span>
                             </span>
-                            {job.status === "done" && !job.autoPublish && (
+                            {job.status === "done" && !job.autoPublish && job.verification !== "published" && (
                               <span className="truncate text-xs text-muted">{t("reviewHint")}</span>
                             )}
+                            {job.status === "queued" && job.retryAt && <RetryCountdown at={job.retryAt} />}
                             {job.error && job.status !== "done" && (
                               <span
                                 className={cx(
@@ -171,6 +174,7 @@ export function ActivityView() {
                               </span>
                             )}
                           </div>
+                          <VerificationBadge job={job} />
                           <StatusPill status={job.status} review={!job.autoPublish} />
                           <div className="flex w-[100px] justify-end gap-0.5">
                             {openWindows.has(job.id) && (
@@ -200,5 +204,53 @@ export function ActivityView() {
         )}
       </div>
     </div>
+  );
+}
+
+function RetryCountdown({ at }: { at: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <span className="text-xs text-muted">{t("retryingIn", { s: Math.max(0, Math.ceil((at - now) / 1000)) })}</span>
+  );
+}
+
+function VerificationBadge({ job }: { job: PublishJob }) {
+  const v = job.verification;
+  if (!v || (v === "pending" && !["done", "attention"].includes(job.status))) return null;
+  if (v === "unconfirmed" && job.status !== "done" && job.status !== "attention") return null;
+  if (v === "rejected") return null; // shown as the job's error
+  const styles: Record<string, string> = {
+    published: "bg-success/10 text-success",
+    likely: "bg-success/5 text-success",
+    unconfirmed: "bg-warning/10 text-warning",
+    pending: "bg-elevated text-muted",
+  };
+  const help = v === "unconfirmed" ? t("verifHelp_unconfirmed") : v === "likely" ? t("verifHelp_likely") : undefined;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <span
+        title={help}
+        className={cx("inline-flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-medium", styles[v])}>
+        {v === "published" ? (
+          <BadgeCheck size={12} />
+        ) : v === "pending" ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : null}
+        {t(`verif_${v}` as MessageKey)}
+      </span>
+      {job.postUrl && (
+        <button
+          type="button"
+          onClick={() => api.openExternal(job.postUrl!)}
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-primary-600 hover:underline">
+          {t("viewPost")}
+          <ExternalLink size={11} />
+        </button>
+      )}
+    </span>
   );
 }

@@ -1,7 +1,7 @@
 {
   "name": "multipost-desktop",
   "productName": "MultiPost Desktop",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Desktop app to publish to many social media accounts at once, with isolated Chromium sessions per account.",
   "author": "leaperone",
   "license": "Apache-2.0",
@@ -14,9 +14,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dist:win": "node build.mjs && electron-builder --win --x64 --publish never",
     "dist:linux": "node build.mjs && electron-builder --linux dir --publish never",
-    "e2e": "node build.mjs && node test/build-e2e.mjs && node test/e2e.mjs"
+    "e2e": "node build.mjs && node test/build-e2e.mjs && node test/e2e.mjs",
+    "test:unit": "node test/unit.mjs"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@types/chrome": "^0.0.251",
     "@types/node": "^22.20.4",
     "@types/react": "^18.3.31",
@@ -32,13 +34,14 @@
     "simple-icons": "^16.33.0",
     "tailwindcss": "^3.4.17",
     "turndown": "^7.2.4",
-    "typescript": "5.9"
+    "typescript": "5.9",
+    "zod": "^4.6.5"
   },
   "build": {
     "appId": "com.leaperone.multipost.desktop",
     "productName": "MultiPost Desktop",
     "executableName": "MultiPost",
-    "copyright": "Copyright © leaperone",
+    "copyright": "Copyright \u00a9 leaperone",
     "directories": {
       "output": "release",
       "buildResources": "build"

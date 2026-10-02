@@ -42,7 +42,11 @@ function decryptSecret(value: string | undefined): string | undefined {
 
 function serialize(s: AppState): string {
   return JSON.stringify(
-    { ...s, accounts: s.accounts.map((a) => (a.proxy ? { ...a, proxy: encryptSecret(a.proxy) } : a)) },
+    {
+      ...s,
+      settings: { ...s.settings, aiApiKey: encryptSecret(s.settings.aiApiKey) },
+      accounts: s.accounts.map((a) => (a.proxy ? { ...a, proxy: encryptSecret(a.proxy) } : a)),
+    },
     null,
     2,
   );
@@ -70,6 +74,7 @@ export function loadState(): AppState {
       settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) },
     };
     for (const account of state.accounts) account.proxy = decryptSecret(account.proxy);
+    state.settings.aiApiKey = decryptSecret(state.settings.aiApiKey);
     // Jobs that were running when the app quit can never finish.
     for (const job of state.jobs) {
       if (job.status === "queued" || job.status === "loading" || job.status === "injecting") {
@@ -93,6 +98,13 @@ export function loadState(): AppState {
 
 export function getState(): AppState {
   return state;
+}
+
+export const SECRET_MASK = "••••••••";
+
+/** The state as the UI may see it: secrets are replaced by a mask. */
+export function publicState(): AppState {
+  return { ...state, settings: { ...state.settings, aiApiKey: state.settings.aiApiKey ? SECRET_MASK : undefined } };
 }
 
 function sleepSync(ms: number) {

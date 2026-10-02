@@ -47,6 +47,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run test:unit
       - name: End-to-end publish test
         run: |
           npm install --no-save --no-audit --no-fund playwright@1.56.1
@@ -69,6 +70,22 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Configure code signing (optional)
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          # Add repository secrets WIN_CSC_LINK (base64 of your .pfx code-signing certificate) and
+          # WIN_CSC_KEY_PASSWORD to sign the installer, portable exe and updates. Without them builds are unsigned.
+          if ($env:WIN_CSC_LINK) {
+            "CSC_LINK=$env:WIN_CSC_LINK" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "CSC_KEY_PASSWORD=$env:WIN_CSC_KEY_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "CSC_IDENTITY_AUTO_DISCOVERY=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Output "Code signing enabled"
+          } else {
+            Write-Output "No signing certificate configured: building unsigned"
+          }
       - run: npx electron-builder --win --x64 --publish never
       - name: Collect artifacts
         shell: pwsh

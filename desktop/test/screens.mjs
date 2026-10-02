@@ -30,13 +30,13 @@ const accounts = [
   acc("a8", "douyin", "抖音 主号", "logged-in", "acme_dy"),
 ];
 const groups = [
-  { id: "g1", name: "International", color: "#6366f1", accountIds: ["a1", "a2", "a6", "a7"], createdAt: now },
+  { id: "g1", name: "International", color: "#6366f1", accountIds: ["a1", "a2", "a6", "a7"], createdAt: now, footer: "— Try it free at acme.app", hashtags: ["acme"] },
   { id: "g2", name: "China", color: "#ef4444", accountIds: ["a3", "a4", "a5", "a8"], createdAt: now },
   { id: "g3", name: "Launch day", color: "#10b981", accountIds: ["a1", "a3", "a6"], createdAt: now },
 ];
 const jobs = [
-  { id: "j1", runId: "r1", accountId: "a1", accountLabel: "Brand – Global", platform: "DYNAMIC_X", platformName: "X", status: "done", attempts: 1 },
-  { id: "j2", runId: "r1", accountId: "a2", accountLabel: "Brand – Support", platform: "DYNAMIC_X", platformName: "X", status: "done", attempts: 1 },
+  { id: "j1", runId: "r1", accountId: "a1", accountLabel: "Brand – Global", platform: "DYNAMIC_X", platformName: "X", status: "done", attempts: 1, autoPublish: true, verification: "published", postUrl: "https://x.com/i/web/status/1" },
+  { id: "j2", runId: "r1", accountId: "a2", accountLabel: "Brand – Support", platform: "DYNAMIC_X", platformName: "X", status: "done", attempts: 1, autoPublish: true, verification: "unconfirmed" },
   { id: "j3", runId: "r1", accountId: "a3", accountLabel: "官方号", platform: "DYNAMIC_BILIBILI", platformName: "Bilibili", status: "failed", error: "Not signed in — redirected to passport.bilibili.com. Sign in to this account and retry.", attempts: 1 },
   { id: "j4", runId: "r1", accountId: "a6", accountLabel: "Company page", platform: "DYNAMIC_LINKEDIN", platformName: "LinkedIn", status: "injecting", attempts: 1 },
   { id: "j5", runId: "r1", accountId: "a7", accountLabel: "Founder", platform: "DYNAMIC_THREADS", platformName: "Threads", status: "queued", attempts: 0 },
@@ -65,8 +65,9 @@ await win.waitForTimeout(1200);
 await win.evaluate(() => {
   localStorage.setItem("multipost.draft.v1", JSON.stringify({
     contentType: "DYNAMIC", title: "", digest: "", htmlContent: "", markdownContent: "", tags: ["launch", "productivity"],
-    content: "We just shipped v2 🚀\n\nScheduling, groups and a brand-new editor. Try it today and tell us what you think!",
+    content: "We just shipped v2 🚀\n\nScheduling, groups and a brand-new editor. Try it today and tell us what you think! We rebuilt the whole publishing pipeline from scratch so that every post lands exactly where you want it, in every account, every time.",
     images: [], videos: [],
+    overrides: { "platform:DYNAMIC_LINKEDIN": { content: "Today we're launching Acme v2 — the biggest update since we started. Here's what changed and why it matters for teams that publish everywhere." } },
   }));
   localStorage.setItem("multipost.targets.v1", JSON.stringify({ DYNAMIC: ["a1:DYNAMIC_X", "a2:DYNAMIC_X", "a3:DYNAMIC_BILIBILI", "a6:DYNAMIC_LINKEDIN"] }));
 });

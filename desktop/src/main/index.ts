@@ -13,8 +13,10 @@ import {
   type Settings,
 } from "../shared/types";
 import { closeLoginWindow, detectAccount, openLoginWindow } from "./accounts";
+import { describeAiError, rewriteForPlatform } from "./ai";
 import { currentLocale } from "./i18n-shim";
 import { listPlatforms, listSites } from "./platforms";
+import { preflight } from "./preflight";
 import {
   activeJobCount,
   canRetry,
@@ -25,6 +27,7 @@ import {
   showJobWindow,
   startPublish,
 } from "./publisher";
+import { detectRegion } from "./region";
 import {
   cleanUserAgent,
   clearAccountSession,
@@ -36,7 +39,7 @@ import {
   removePartitionDirs,
   validateProxy,
 } from "./sessions";
-import { flush, getState, loadState, onChange, replaceState, update } from "./store";
+import { SECRET_MASK, flush, getState, loadState, onChange, publicState, replaceState, update } from "./store";
 import { startAutoUpdates } from "./updater";
 
 registerSchemes();
@@ -142,7 +145,7 @@ onChange(() => {
   if (pushTimer) return;
   pushTimer = setTimeout(() => {
     pushTimer = null;
-    mainWindow?.webContents.send("state", getState());
+    mainWindow?.webContents.send("state", publicState());
   }, 16);
 });
 
@@ -159,7 +162,7 @@ function stripProxyCredentials(proxy: string | undefined): string | undefined {
 }
 
 function sanitizeAccountPatch(patch: Partial<Account>): Partial<Account> {
-  const allowed: (keyof Account)[] = ["label", "proxy", "userAgent", "extraConfig", "notes"];
+  const allowed: (keyof Account)[] = ["label", "proxy", "userAgent", "extraConfig", "notes", "timezone", "locale"];
   const out: Partial<Account> = {};
   for (const key of allowed) if (key in patch) (out as Record<string, unknown>)[key] = patch[key];
   if (typeof out.label === "string") out.label = out.label.trim().slice(0, 80) || "Account";
@@ -181,7 +184,7 @@ function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, 
 
 function registerIpc() {
   handle("app:init", () => ({
-    state: getState(),
+    state: publicState(),
     platforms: listPlatforms(),
     sites: listSites(),
     version: app.getVersion(),
@@ -201,18 +204,27 @@ function registerIpc() {
     update((s) => s.groups.push(group));
     return group;
   });
-  handle("group:update", (_e, id: string, patch: Partial<Pick<Group, "name" | "color" | "accountIds">>) => {
-    update((s) => {
-      const g = s.groups.find((x) => x.id === id);
-      if (!g) return;
-      if (typeof patch.name === "string") g.name = patch.name.trim().slice(0, 60) || g.name;
-      if (typeof patch.color === "string") g.color = patch.color;
-      if (Array.isArray(patch.accountIds)) {
-        const valid = new Set(s.accounts.map((a) => a.id));
-        g.accountIds = [...new Set(patch.accountIds)].filter((x) => valid.has(x));
-      }
-    });
-  });
+  handle(
+    "group:update",
+    (_e, id: string, patch: Partial<Pick<Group, "name" | "color" | "accountIds" | "footer" | "hashtags">>) => {
+      update((s) => {
+        const g = s.groups.find((x) => x.id === id);
+        if (!g) return;
+        if (typeof patch.name === "string") g.name = patch.name.trim().slice(0, 60) || g.name;
+        if (typeof patch.color === "string") g.color = patch.color;
+        if (Array.isArray(patch.accountIds)) {
+          const valid = new Set(s.accounts.map((a) => a.id));
+          g.accountIds = [...new Set(patch.accountIds)].filter((x) => valid.has(x));
+        }
+        if (typeof patch.footer === "string") g.footer = patch.footer.slice(0, 2000) || undefined;
+        if (Array.isArray(patch.hashtags)) {
+          g.hashtags = [
+            ...new Set(patch.hashtags.map((t) => String(t).trim().replace(/^#+/, "")).filter(Boolean)),
+          ].slice(0, 50);
+        }
+      });
+    },
+  );
   handle("group:delete", (_e, id: string) => {
     update((s) => {
       s.groups = s.groups.filter((g) => g.id !== id);
@@ -323,6 +335,15 @@ function registerIpc() {
   handle("job:show", (_e, id: string) => showJobWindow(id));
   handle("job:canRetry", (_e, ids: string[]) => ids.filter((id) => canRetry(id)));
   handle("job:openWindows", () => openJobWindowIds());
+  handle("publish:preflight", (_e, targets: PublishRequest["targets"]) => preflight(targets));
+  handle("ai:rewrite", async (_e, input: Parameters<typeof rewriteForPlatform>[0]) => {
+    try {
+      return await rewriteForPlatform(input);
+    } catch (error) {
+      throw new Error(describeAiError(error));
+    }
+  });
+  handle("account:detectRegion", (_e, id: string) => detectRegion(id));
   handle("history:clear", () => {
     const before = new Set(getState().runs.map((r) => r.id));
     update((s) => {
@@ -340,7 +361,11 @@ function registerIpc() {
   });
 
   // Settings & data
-  handle("settings:update", (_e, patch: Partial<Settings>) => {
+  handle("settings:update", (_e, incoming: Partial<Settings>) => {
+    // The UI only ever sees a mask for the stored key: sending the mask back means "unchanged".
+    const { aiApiKey, ...rest } = incoming;
+    const patch: Partial<Settings> = rest;
+    if (typeof aiApiKey === "string" && aiApiKey !== SECRET_MASK) patch.aiApiKey = aiApiKey.trim() || undefined;
     update((s) => {
       const next = { ...s.settings, ...patch };
       next.concurrency = Math.min(10, Math.max(1, Math.round(Number(next.concurrency) || 1)));
@@ -361,7 +386,17 @@ function registerIpc() {
     const safeAccounts = accounts.map((a) => ({ ...a, proxy: stripProxyCredentials(a.proxy) }));
     fs.writeFileSync(
       result.filePath,
-      JSON.stringify({ format: "multipost-desktop", version: 1, groups, accounts: safeAccounts, settings }, null, 2),
+      JSON.stringify(
+        {
+          format: "multipost-desktop",
+          version: 1,
+          groups,
+          accounts: safeAccounts,
+          settings: { ...settings, aiApiKey: undefined },
+        },
+        null,
+        2,
+      ),
     );
     return true;
   });

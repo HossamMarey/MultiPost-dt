@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { net, type Session, app, protocol, session } from "electron";
 import type { Account, LocalFile } from "../shared/types";
+import { acceptLanguageFor } from "./cdp";
 
 export const FILE_SCHEME = "multipost-file";
 
@@ -108,6 +109,7 @@ async function handleFileRequest(request: Request): Promise<Response> {
 interface SessionConfig {
   proxy: string;
   userAgent: string;
+  locale: string;
 }
 // partition -> promise of the config being applied, so concurrent jobs share one setup.
 const configured = new Map<string, { config: SessionConfig; ready: Promise<Session> }>();
@@ -203,7 +205,10 @@ async function applyConfig(ses: Session, partition: string, config: SessionConfi
     initSession(ses);
     initialized.add(partition);
   }
-  ses.setUserAgent(config.userAgent || cleanUserAgent(ses.getUserAgent()), acceptLanguages());
+  ses.setUserAgent(
+    config.userAgent || cleanUserAgent(ses.getUserAgent()),
+    acceptLanguageFor(config.locale) ?? acceptLanguages(),
+  );
   if (config.proxy) {
     const parsed = parseProxy(config.proxy);
     await ses.setProxy({ proxyRules: parsed.rules, proxyBypassRules: "<local>" });
@@ -220,9 +225,18 @@ async function applyConfig(ses: Session, partition: string, config: SessionConfi
 
 export function sessionForAccount(account: Account): Promise<Session> {
   const ses = session.fromPartition(account.partition);
-  const config: SessionConfig = { proxy: account.proxy?.trim() ?? "", userAgent: account.userAgent?.trim() ?? "" };
+  const config: SessionConfig = {
+    proxy: account.proxy?.trim() ?? "",
+    userAgent: account.userAgent?.trim() ?? "",
+    locale: account.locale?.trim() ?? "",
+  };
   const current = configured.get(account.partition);
-  if (current && current.config.proxy === config.proxy && current.config.userAgent === config.userAgent) {
+  if (
+    current &&
+    current.config.proxy === config.proxy &&
+    current.config.userAgent === config.userAgent &&
+    current.config.locale === config.locale
+  ) {
     return current.ready;
   }
   // Chain after any in-flight setup so two configs never interleave.

@@ -2,6 +2,7 @@
 import "../src/main/index";
 import { createAccountWindow } from "../src/main/browser-windows";
 import { infoMap } from "../src/main/platforms";
+import { preflight } from "../src/main/preflight";
 import { cancelJob, retryJob, startPublish } from "../src/main/publisher";
 import { markScriptless } from "../src/main/sessions";
 import { flush, getState, update } from "../src/main/store";
@@ -41,6 +42,9 @@ const base = process.env.E2E_URL ?? "http://127.0.0.1:1/compose";
 for (const [name, injectUrl, fn] of [
   ["DYNAMIC_E2E_LOGIN", base.replace("/compose", "/needs-login"), e2eInject],
   ["DYNAMIC_E2E_HANG", base, e2eHang],
+  ["DYNAMIC_E2E_REJECT", base.replace("/compose", "/compose-reject"), e2eInject],
+  // Nothing listens there: the page load fails with a network error (retry path).
+  ["DYNAMIC_E2E_DOWN", process.env.E2E_DOWN_URL ?? "http://127.0.0.1:1/compose", e2eInject],
 ] as const) {
   infoMap[name] = { ...infoMap.DYNAMIC_E2E, name, injectUrl, injectFunction: fn as never, platformName: name };
 }
@@ -54,4 +58,5 @@ for (const [name, injectUrl, fn] of [
   flush,
   createAccountWindow,
   markScriptless,
+  preflight,
 };

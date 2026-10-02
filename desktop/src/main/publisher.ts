@@ -4,12 +4,14 @@
 import crypto from "node:crypto";
 import type { BrowserWindow } from "electron";
 import type { ArticleData, DynamicData, FileData, PodcastData, SyncData, VideoData } from "~sync/common";
+import { type ResolvedContent, resolveContent } from "../shared/compose";
 import type { Account, Draft, JobStatus, LocalFile, PublishJob, PublishRequest } from "../shared/types";
 import { createAccountWindow } from "./browser-windows";
 import { markdownToHtml } from "./markdown";
-import { getPlatformInfo } from "./platforms";
+import { getPlatformInfo, listSites } from "./platforms";
 import { revokeFiles, serveFile } from "./sessions";
 import { getState, update } from "./store";
+import { type VerificationUpdate, watchPublish } from "./verifier";
 
 // Same isolation the extension gets from chrome.scripting (ISOLATED world): page scripts cannot
 // tamper with the inject function, while the DOM is shared.
@@ -38,53 +40,59 @@ const windows = new Map<string, JobWindow>();
 const queue: string[] = [];
 let active = 0;
 
-function buildData(draft: Draft, tokens: string[]): DynamicData | ArticleData | VideoData | PodcastData {
+function buildData(
+  draft: Draft,
+  resolved: ResolvedContent,
+  tokens: string[],
+): DynamicData | ArticleData | VideoData | PodcastData {
   const serve = (file: LocalFile) => {
     const served = serveFile(file);
     tokens.push(served.token);
     return served.data;
   };
   const toFileData = (file: LocalFile | undefined): FileData | undefined => (file ? serve(file) : undefined);
+  const { title, content, tags, cover } = resolved;
   switch (draft.contentType) {
     case "DYNAMIC":
       return {
-        title: draft.title,
-        content: draft.content,
+        title,
+        content,
         images: draft.images.map(serve),
         videos: draft.videos.map(serve),
-        tags: draft.tags,
+        tags,
         scheduledPublishTime: draft.scheduledPublishTime,
       } satisfies DynamicData;
     case "ARTICLE": {
-      const html = draft.htmlContent || markdownToHtml(draft.markdownContent);
+      // Overrides/footers change the Markdown, so HTML is regenerated unless the text is untouched.
+      const html = content === draft.markdownContent && draft.htmlContent ? draft.htmlContent : markdownToHtml(content);
       return {
-        title: draft.title,
+        title,
         digest: draft.digest,
-        cover: toFileData(draft.cover) ?? { name: "", url: "" },
+        cover: toFileData(cover) ?? { name: "", url: "" },
         htmlContent: html,
-        markdownContent: draft.markdownContent,
+        markdownContent: content,
         images: [],
-        tags: draft.tags,
+        tags,
         scheduledPublishTime: draft.scheduledPublishTime,
       } satisfies ArticleData;
     }
     case "VIDEO":
       return {
-        title: draft.title,
-        content: draft.content,
-        description: draft.content,
+        title,
+        content,
+        description: content,
         video: toFileData(draft.video) ?? { name: "", url: "" },
-        cover: toFileData(draft.cover),
-        tags: draft.tags,
+        cover: toFileData(cover),
+        tags,
         scheduledPublishTime: draft.scheduledPublishTime,
       } satisfies VideoData;
     case "PODCAST":
       return {
-        title: draft.title,
-        description: draft.content,
+        title,
+        description: content,
         audio: toFileData(draft.audio) ?? { name: "", url: "" },
-        cover: toFileData(draft.cover),
-        tags: draft.tags,
+        cover: toFileData(cover),
+        tags,
       } satisfies PodcastData;
   }
 }
@@ -137,7 +145,16 @@ export function startPublish(request: PublishRequest): string {
     ctx.syncDataByJob.set(job.id, {
       platforms: [{ name: info.name, injectUrl: info.injectUrl, extraConfig: account.extraConfig }],
       isAutoPublish: request.autoPublish,
-      data: buildData(request.draft, ctx.fileTokens),
+      data: buildData(
+        request.draft,
+        resolveContent(request.draft, {
+          platform: info.name,
+          account,
+          siteLabel: listSites().find((x) => x.accountKey === account.accountKey)?.label ?? account.accountKey,
+          groups: state.groups.filter((g) => g.accountIds.includes(account.id)),
+        }),
+        ctx.fileTokens,
+      ),
     });
     jobs.push(job);
   }
@@ -181,7 +198,8 @@ function freeWindowSlots(limit: number) {
   const reclaimable = (jobId: string, entry: JobWindow) => {
     const status = jobStatus(jobId);
     if (!entry.finished || entry.win.isDestroyed()) return false;
-    return (entry.autoPublish && status === "done") || status === "failed" || status === "cancelled";
+    const pendingProof = getState().jobs.find((j) => j.id === jobId)?.verification === "pending";
+    return (entry.autoPublish && status === "done" && !pendingProof) || status === "failed" || status === "cancelled";
   };
   for (const [jobId, entry] of windows) {
     if (windows.size < limit) return;
@@ -203,9 +221,28 @@ function pump() {
     active++;
     runJob(jobId)
       .catch((error) => {
-        if (ACTIVE.includes(jobStatus(jobId)!)) {
-          setJob(jobId, { status: "failed", error: (error as Error).message, finishedAt: Date.now() });
+        if (!ACTIVE.includes(jobStatus(jobId)!)) return;
+        const job = getState().jobs.find((j) => j.id === jobId);
+        const retryNo = (job?.attempts ?? 1) - 1;
+        if (error instanceof NetworkError && getState().settings.autoRetry && retryNo < RETRY_DELAYS_MS.length) {
+          const delay = RETRY_DELAYS_MS[retryNo];
+          const entry = windows.get(jobId);
+          windows.delete(jobId);
+          if (entry && !entry.win.isDestroyed()) entry.win.destroy();
+          setJob(jobId, {
+            status: "queued",
+            error: `${error.message} Retrying automatically…`,
+            retryAt: Date.now() + delay,
+          });
+          setTimeout(() => {
+            if (jobStatus(jobId) !== "queued") return; // cancelled meanwhile
+            setJob(jobId, { retryAt: undefined });
+            queue.push(jobId);
+            pump();
+          }, delay);
+          return;
         }
+        setJob(jobId, { status: "failed", error: (error as Error).message, finishedAt: Date.now() });
       })
       .finally(() => {
         active--;
@@ -216,7 +253,39 @@ function pump() {
   }
 }
 
+// How long after an auto-submit we wait for the platform's confirmation before calling it unconfirmed.
+const VERIFY_WAIT_MS = 3 * 60_000;
+
+function applyVerification(jobId: string, u: VerificationUpdate, autoPublish: boolean) {
+  const job = getState().jobs.find((j) => j.id === jobId);
+  if (!job) return;
+  const patch: Partial<PublishJob> = { ...u };
+  if (u.verification === "rejected") {
+    // The platform said no: never show this as done.
+    if (job.status === "done" || job.status === "injecting" || job.status === "attention") {
+      patch.status = autoPublish ? "failed" : "attention";
+      patch.error = `The platform rejected the post: ${u.verificationNote}`;
+      patch.finishedAt = job.finishedAt ?? Date.now();
+    }
+  } else if (u.verification === "published" && job.status === "attention") {
+    patch.status = "done";
+    patch.error = undefined;
+  }
+  setJob(jobId, patch);
+  const entry = windows.get(jobId);
+  if (u.verification === "published" && autoPublish && getState().settings.closeWindowsOnSuccess && entry) {
+    setTimeout(() => !entry.win.isDestroyed() && entry.win.close(), 3000);
+  }
+}
+
 class JobAbort extends Error {}
+
+/** A page load that failed for network reasons: nothing was submitted yet, so it is safe to retry. */
+class NetworkError extends Error {}
+
+// Chromium net error codes worth retrying (timeouts, resets, DNS, proxy and connectivity hiccups).
+const TRANSIENT_NET_ERRORS = new Set([-7, -15, -21, -100, -101, -102, -104, -105, -106, -109, -118, -130, -137, -324]);
+const RETRY_DELAYS_MS = [20_000, 60_000];
 
 /** Rejects when the page crashes, hangs, or its window is closed — for the whole life of the job. */
 function watchdog(win: BrowserWindow): { aborted: Promise<never>; dispose: () => void } {
@@ -270,7 +339,8 @@ function waitForLoad(win: BrowserWindow, url: string, timeoutMs: number): Promis
     const onFail = (_e: unknown, code: number, desc: string, _url: string, isMainFrame: boolean) => {
       if (!isMainFrame || code === -3 /* ABORTED: superseded by a redirect */) return;
       cleanup();
-      reject(new Error(`Page failed to load: ${desc} (${code}). Check the connection or this account's proxy.`));
+      const message = `Page failed to load: ${desc} (${code}). Check the connection or this account's proxy.`;
+      reject(TRANSIENT_NET_ERRORS.has(code) ? new NetworkError(message) : new Error(message));
     };
     function cleanup() {
       clearTimeout(timer);
@@ -288,7 +358,7 @@ function waitForLoad(win: BrowserWindow, url: string, timeoutMs: number): Promis
 }
 
 /** Rough registrable domain ("creator.douyin.com" → "douyin.com", "mp.sohu.com.cn" → "sohu.com.cn"). */
-function siteOf(url: string): string {
+export function siteOf(url: string): string {
   try {
     const parts = new URL(url).hostname.split(".");
     const take = parts.length > 2 && /^(com|net|org|gov|edu|co)$/.test(parts[parts.length - 2]) ? 3 : 2;
@@ -298,7 +368,7 @@ function siteOf(url: string): string {
   }
 }
 
-function looksLikeLogin(url: string, expected: string): boolean {
+export function looksLikeLogin(url: string, expected: string): boolean {
   try {
     const u = new URL(url);
     return LOGIN_URL_HINT.test(u.hostname + u.pathname) && u.pathname !== new URL(expected).pathname;
@@ -307,7 +377,7 @@ function looksLikeLogin(url: string, expected: string): boolean {
   }
 }
 
-function markLoggedOut(accountId: string) {
+export function markLoggedOut(accountId: string) {
   update((s) => {
     const a = s.accounts.find((x) => x.id === accountId);
     if (a) a.status = "logged-out";
@@ -339,10 +409,23 @@ async function runJob(jobId: string) {
     show: settings.showPublishWindows,
   });
   windows.set(jobId, { win, finished: false, autoPublish: syncData.isAutoPublish });
+  // Watch what the platform answers for as long as the window is open: in review mode the user
+  // presses publish themselves, possibly long after the form was filled.
+  setJob(jobId, { verification: "pending", verificationNote: undefined, postUrl: undefined });
+  const stopWatching = watchPublish(win.webContents, {
+    siteKey: account.accountKey,
+    publishUrl: injectUrl,
+    context: { username: account.profile?.username },
+    onUpdate: (u) => applyVerification(jobId, u, syncData.isAutoPublish),
+  });
   win.on("closed", () => {
+    stopWatching();
     windows.delete(jobId);
     if (ACTIVE.includes(jobStatus(jobId)!)) {
       setJob(jobId, { status: "cancelled", error: "Window closed", finishedAt: Date.now() });
+    }
+    if (getState().jobs.find((j) => j.id === jobId)?.verification === "pending") {
+      setJob(jobId, { verification: "unconfirmed" });
     }
     pump();
   });
@@ -412,8 +495,13 @@ async function runJob(jobId: string) {
       }
     }
     setJob(jobId, { status: "done", finishedAt: Date.now(), url: finalUrl });
-    if (settings.closeWindowsOnSuccess && syncData.isAutoPublish && !win.isDestroyed()) {
-      setTimeout(() => !win.isDestroyed() && win.close(), 5000);
+    if (syncData.isAutoPublish) {
+      // Uploads and processing can take a while after the click; give the platform time to answer.
+      setTimeout(() => {
+        const j = getState().jobs.find((x) => x.id === jobId);
+        if (j?.verification === "pending") setJob(jobId, { verification: "unconfirmed" });
+        if (settings.closeWindowsOnSuccess && j?.verification === "published" && !win.isDestroyed()) win.close();
+      }, VERIFY_WAIT_MS);
     }
   } catch (error) {
     if (error instanceof JobAbort && error.message === "Window closed") return; // handled by "closed"
@@ -423,7 +511,7 @@ async function runJob(jobId: string) {
   }
 }
 
-function customInjectUrl(account: Account): string | undefined {
+export function customInjectUrl(account: Account): string | undefined {
   const urls = (account.extraConfig as { customInjectUrls?: string[] } | undefined)?.customInjectUrls;
   return urls?.find((u) => /^https?:\/\//.test(u));
 }
