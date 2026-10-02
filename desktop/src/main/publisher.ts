@@ -8,7 +8,7 @@ import { type ResolvedContent, resolveContent } from "../shared/compose";
 import type { Account, Draft, JobStatus, LocalFile, PublishJob, PublishRequest } from "../shared/types";
 import { createAccountWindow } from "./browser-windows";
 import { markdownToHtml } from "./markdown";
-import { getPlatformInfo, listSites } from "./platforms";
+import { VIDEO_VIA_POST, getPlatformInfo, listSites } from "./platforms";
 import { revokeFiles, serveFile } from "./sessions";
 import { getState, update } from "./store";
 import { type VerificationUpdate, watchPublish } from "./verifier";
@@ -97,6 +97,11 @@ function buildData(
   }
 }
 
+/** A video draft shaped as a post with one video, for platforms that publish videos through their post page. */
+function videoAsPost(draft: Draft): Draft {
+  return { ...draft, contentType: "DYNAMIC", images: [], videos: draft.video ? [draft.video] : [] };
+}
+
 export function validateDraft(draft: Draft): string | null {
   if (draft.contentType === "VIDEO" && !draft.video) return "A video file is required";
   if (draft.contentType === "PODCAST" && !draft.audio) return "An audio file is required";
@@ -143,10 +148,13 @@ export function startPublish(request: PublishRequest): string {
     };
     // Every job gets its own copy (and its own file tokens) of the payload.
     ctx.syncDataByJob.set(job.id, {
-      platforms: [{ name: info.name, injectUrl: info.injectUrl, extraConfig: account.extraConfig }],
+      // A video sent through a post script is given exactly what that script expects (its own name, post data).
+      platforms: [
+        { name: VIDEO_VIA_POST[info.name] ?? info.name, injectUrl: info.injectUrl, extraConfig: account.extraConfig },
+      ],
       isAutoPublish: request.autoPublish,
       data: buildData(
-        request.draft,
+        VIDEO_VIA_POST[info.name] ? videoAsPost(request.draft) : request.draft,
         resolveContent(request.draft, {
           platform: info.name,
           account,

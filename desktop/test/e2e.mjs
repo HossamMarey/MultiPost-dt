@@ -366,7 +366,43 @@ try {
   check(tz === "Asia/Tokyo|-540", `account timezone applied to pages (${tz})`);
   check(/^ja-JP/.test(lastAcceptLanguage), `account language sent as Accept-Language (${lastAcceptLanguage})`);
 
-  // 15. A second app instance must exit without touching the data file
+  // 15. Facebook/Instagram/X… take videos through their post page: they are offered under Video too
+  const videoPlatforms = await app.evaluate(async () => {
+    const { listPlatforms } = globalThis.__mp;
+    return listPlatforms().filter((p) => p.type === "VIDEO").map((p) => p.name);
+  });
+  check(
+    ["VIDEO_FACEBOOK", "VIDEO_INSTAGRAM", "VIDEO_X", "VIDEO_LINKEDIN", "VIDEO_THREADS"].every((n) => videoPlatforms.includes(n)) &&
+      videoPlatforms.includes("VIDEO_YOUTUBE") &&
+      !videoPlatforms.includes("VIDEO_BLUESKY_DUP"),
+    `video-capable post platforms listed under Video (${videoPlatforms.filter((n) => /FACEBOOK|INSTAGRAM|_X$|LINKEDIN|THREADS|REDDIT/.test(n)).join(", ")})`,
+  );
+
+  const videoPath = path.join(tmp, "clip.mp4");
+  fs.writeFileSync(videoPath, Buffer.alloc(4321, 1));
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.webContents.getURL().startsWith("file:")) w.destroy();
+  });
+  const videoRun = await app.evaluate(({}, { id, videoPath }) =>
+    globalThis.__mp.startPublish({
+      autoPublish: false,
+      targets: [{ accountId: id, platform: "VIDEO_E2E" }],
+      draft: {
+        contentType: "VIDEO", title: "My reel", content: "Reel description", digest: "", htmlContent: "", markdownContent: "",
+        tags: [], images: [], videos: [], video: { path: videoPath, name: "clip.mp4", size: 4321, type: "video/mp4" },
+      },
+    }), { id: ids[0], videoPath });
+  await waitJobs(videoRun, finished);
+  const viaPost = await app.evaluate(async ({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents.getURL().startsWith("file:")) continue;
+      return w.webContents.executeJavaScript('[document.body.getAttribute("data-result"), document.querySelector("#editor").value]');
+    }
+    return null;
+  });
+  check(viaPost?.[0]?.startsWith("ok:4321:") && viaPost?.[1]?.startsWith("Reel description"), `video sent through a post page carries the video file (${viaPost?.[0]?.slice(0, 10)}, ${viaPost?.[1]})`);
+
+  // 16. A second app instance must exit without touching the data file
   await sleep(600); // let the debounced save land
   const before = fs.readFileSync(path.join(userData, "multipost-data.json"), "utf8");
   const second = spawnSync(electronPath, [mainScript, "--no-sandbox"], {
