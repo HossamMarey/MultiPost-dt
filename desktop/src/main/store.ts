@@ -1,7 +1,7 @@
 // Local JSON store. Everything stays on this machine under the app's userData folder.
 import fs from "node:fs";
 import path from "node:path";
-import { app } from "electron";
+import { app, safeStorage } from "electron";
 import { type AppState, DEFAULT_SETTINGS } from "../shared/types";
 
 const MAX_RUNS = 200;
@@ -20,6 +20,33 @@ let state: AppState = emptyState();
 let loaded = false;
 let saveTimer: NodeJS.Timeout | null = null;
 const listeners = new Set<(s: AppState) => void>();
+
+// Proxy URLs can carry passwords: keep them encrypted at rest with the OS keystore (DPAPI on Windows).
+const ENC_PREFIX = "enc:v1:";
+
+function encryptSecret(value: string | undefined): string | undefined {
+  if (!value || !safeStorage.isEncryptionAvailable()) return value;
+  return ENC_PREFIX + safeStorage.encryptString(value).toString("base64");
+}
+
+function decryptSecret(value: string | undefined): string | undefined {
+  if (!value?.startsWith(ENC_PREFIX)) return value;
+  try {
+    return safeStorage.decryptString(Buffer.from(value.slice(ENC_PREFIX.length), "base64"));
+  } catch (error) {
+    // Data copied from another Windows user/computer can't be decrypted; drop the proxy rather than fail.
+    console.error("Could not decrypt a stored proxy; it was removed", error);
+    return undefined;
+  }
+}
+
+function serialize(s: AppState): string {
+  return JSON.stringify(
+    { ...s, accounts: s.accounts.map((a) => (a.proxy ? { ...a, proxy: encryptSecret(a.proxy) } : a)) },
+    null,
+    2,
+  );
+}
 
 function readDataFile(): Partial<AppState> {
   try {
@@ -42,6 +69,7 @@ export function loadState(): AppState {
       ...raw,
       settings: { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) },
     };
+    for (const account of state.accounts) account.proxy = decryptSecret(account.proxy);
     // Jobs that were running when the app quit can never finish.
     for (const job of state.jobs) {
       if (job.status === "queued" || job.status === "loading" || job.status === "injecting") {
@@ -78,7 +106,7 @@ function writeNow() {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const fd = fs.openSync(tmp, "w");
   try {
-    fs.writeFileSync(fd, JSON.stringify(state, null, 2));
+    fs.writeFileSync(fd, serialize(state));
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

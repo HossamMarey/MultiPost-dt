@@ -35,6 +35,11 @@ const server = http.createServer((req, res) => {
     res.end();
     return;
   }
+  if (req.url.startsWith("/scripted")) {
+    res.setHeader("Content-Type", "text/html");
+    res.end("<title>scripted</title><script>window.__pageScriptRan = true;</script><p>home</p>");
+    return;
+  }
   if (req.url.startsWith("/passport")) {
     res.end("<title>login</title>please sign in");
     return;
@@ -184,7 +189,46 @@ try {
   jobs = await waitJobs(runB, finished);
   check(jobs[0]?.status === "done", `queued job starts once a window is closed (${jobs[0]?.status})`);
 
-  // 7. A second app instance must exit without touching the data file
+  // 7. Sign-in check windows run no page scripts, but the app's own injected code still runs
+  const scriptless = await app.evaluate(async ({}, url) => {
+    const mp = globalThis.__mp;
+    const account = mp.getState().accounts[0];
+    const win = await mp.createAccountWindow(account, { title: "detect", show: false, webSecurity: false });
+    const unmark = mp.markScriptless(win.webContents.id);
+    await win.loadURL(url.replace("/compose", "/scripted"));
+    const r = await win.webContents.executeJavaScript("[window.__pageScriptRan === true, 1 + 1]");
+    unmark();
+    win.destroy();
+    return r;
+  }, url);
+  check(scriptless[0] === false && scriptless[1] === 2, `page scripts blocked in sign-in checks, app code still runs (${scriptless})`);
+
+  // 8. Proxy passwords are encrypted on disk (or at least never written in clear when encryption is available)
+  const enc = await app.evaluate(({ safeStorage }, id) => {
+    const mp = globalThis.__mp;
+    mp.update((s) => {
+      s.accounts.find((a) => a.id === id).proxy = "http://alice:S3cretPass@127.0.0.1:9";
+    });
+    mp.flush();
+    return safeStorage.isEncryptionAvailable();
+  }, ids[1]);
+  const onDisk = fs.readFileSync(path.join(userData, "multipost-data.json"), "utf8");
+  check(!enc || !onDisk.includes("S3cretPass"), `proxy password not stored in clear (encryption available: ${enc})`);
+  await app.evaluate(({}, id) => {
+    globalThis.__mp.update((s) => {
+      s.accounts.find((a) => a.id === id).proxy = undefined;
+    });
+  }, ids[1]);
+
+  // 9. A website in an account window cannot drive the app (no bridge, and IPC rejects other senders)
+  const bridge = await app.evaluate(async ({ BrowserWindow }, url) => {
+    const w = BrowserWindow.getAllWindows().find((x) => !x.webContents.getURL().startsWith("file:"));
+    if (!w) return "no-window";
+    return w.webContents.executeJavaScript("typeof window.multipost + ':' + typeof window.require + ':' + typeof window.process");
+  }, url);
+  check(bridge === "no-window" || bridge === "undefined:undefined:undefined", `account pages get no app bridge (${bridge})`);
+
+  // 10. A second app instance must exit without touching the data file
   await sleep(600); // let the debounced save land
   const before = fs.readFileSync(path.join(userData, "multipost-data.json"), "utf8");
   const second = spawnSync(electronPath, [mainScript, "--no-sandbox"], {

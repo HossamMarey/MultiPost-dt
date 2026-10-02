@@ -128,7 +128,8 @@ const en = {
   openDataFolder: "Open data folder",
   exported: "Backup saved",
   imported: "Backup imported",
-  backupNote: "Backups contain accounts and groups, not passwords or cookies: sign in again on a new computer.",
+  backupNote:
+    "Backups contain accounts and groups, not sign-ins, cookies or proxy passwords: sign in again (and re-enter proxy passwords) on a new computer.",
   about: "About",
   version: "Version",
   platformsSupported: "{n} platforms across {s} sites",
@@ -290,7 +291,7 @@ const zh_CN: Dict = {
   openDataFolder: "打开数据目录",
   exported: "备份已保存",
   imported: "备份已导入",
-  backupNote: "备份包含账号和分组，不包含密码和 Cookie：换电脑后需要重新登录。",
+  backupNote: "备份包含账号和分组，不包含登录状态、Cookie 和代理密码：换电脑后需要重新登录并重新填写代理密码。",
   about: "关于",
   version: "版本",
   platformsSupported: "{s} 个网站，共 {n} 个发布平台",

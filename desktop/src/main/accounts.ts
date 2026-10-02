@@ -6,6 +6,7 @@ import type { Account, AccountProfile } from "../shared/types";
 import { ACCOUNT_GETTER_HOMES } from "./account-getter-keys";
 import { createAccountWindow } from "./browser-windows";
 import { listSites } from "./platforms";
+import { markScriptless } from "./sessions";
 import { getState, update } from "./store";
 
 const loginWindows = new Map<string, BrowserWindow>();
@@ -73,6 +74,7 @@ export function detectAccount(accountId: string): Promise<Account> {
     const home = ACCOUNT_GETTER_HOMES[account.accountKey];
     if (!home) return account;
     const win = await createAccountWindow(account, { title: "detect", show: false, webSecurity: false });
+    const unmark = markScriptless(win.webContents.id);
     try {
       // Network trouble (offline, bad proxy, timeout) says nothing about the sign-in: keep the status.
       const loaded = await withTimeout(
@@ -120,6 +122,7 @@ export function detectAccount(accountId: string): Promise<Account> {
       if (!(error instanceof NetworkError)) throw error;
       throw new Error(`${(error as Error).message}. Sign-in status was not changed.`);
     } finally {
+      unmark();
       if (!win.isDestroyed()) win.destroy();
     }
     return findAccount(accountId);

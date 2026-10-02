@@ -1,7 +1,7 @@
 {
   "name": "multipost-desktop",
   "productName": "MultiPost Desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Desktop app to publish to many social media accounts at once, with isolated Chromium sessions per account.",
   "author": "leaperone",
   "license": "Apache-2.0",
@@ -38,7 +38,7 @@
     "appId": "com.leaperone.multipost.desktop",
     "productName": "MultiPost Desktop",
     "executableName": "MultiPost",
-    "copyright": "Copyright \u00a9 leaperone",
+    "copyright": "Copyright © leaperone",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -88,7 +88,16 @@
         "repo": "MultiPost-dt",
         "releaseType": "release"
       }
-    ]
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": true
+    }
   },
   "dependencies": {
     "electron-updater": "^6.8.9"

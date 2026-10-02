@@ -148,6 +148,16 @@ export function validateProxy(proxy: string | undefined) {
   if (proxy?.trim()) parseProxy(proxy);
 }
 
+// Hidden sign-in check windows run with webSecurity off (the extension's account getters were written for an
+// extension background page). No page script may run there: the site's own and third-party scripts would
+// otherwise get credentialed cross-origin access to the account's session.
+const scriptlessWebContents = new Set<number>();
+
+export function markScriptless(webContentsId: number) {
+  scriptlessWebContents.add(webContentsId);
+  return () => scriptlessWebContents.delete(webContentsId);
+}
+
 function initSession(ses: Session) {
   if (!ses.protocol.isProtocolHandled(FILE_SCHEME)) ses.protocol.handle(FILE_SCHEME, handleFileRequest);
   ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
@@ -166,6 +176,25 @@ function initSession(ses: Session) {
       else if (lower === "sec-ch-ua-full-version-list") headers[key] = SEC_CH_UA_FULL;
     }
     callback({ requestHeaders: headers });
+  });
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    if (details.webContentsId === undefined || !scriptlessWebContents.has(details.webContentsId)) {
+      callback({});
+      return;
+    }
+    if (details.resourceType === "mainFrame" || details.resourceType === "subFrame") {
+      const headers = { ...(details.responseHeaders ?? {}) };
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase().startsWith("content-security-policy")) delete headers[key];
+      }
+      // Scripts injected by the app itself (executeJavaScript) are not affected by the page CSP.
+      headers["Content-Security-Policy"] = [
+        "script-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'",
+      ];
+      callback({ responseHeaders: headers });
+      return;
+    }
+    callback({});
   });
 }
 

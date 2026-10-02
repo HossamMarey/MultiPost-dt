@@ -146,6 +146,18 @@ onChange(() => {
   }, 16);
 });
 
+function stripProxyCredentials(proxy: string | undefined): string | undefined {
+  if (!proxy) return proxy;
+  try {
+    const u = new URL(/^[a-z0-9]+:\/\//i.test(proxy) ? proxy : `http://${proxy}`);
+    u.username = "";
+    u.password = "";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
+  }
+}
+
 function sanitizeAccountPatch(patch: Partial<Account>): Partial<Account> {
   const allowed: (keyof Account)[] = ["label", "proxy", "userAgent", "extraConfig", "notes"];
   const out: Partial<Account> = {};
@@ -154,8 +166,21 @@ function sanitizeAccountPatch(patch: Partial<Account>): Partial<Account> {
   return out;
 }
 
+// Every app command must come from the app's own UI, never from a website shown in an account window.
+// (Account windows expose no bridge today; this keeps it that way even if one is added by mistake.)
+function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => unknown) {
+  ipcMain.handle(channel, (event, ...args) => {
+    const fromMainWindow = !!mainWindow && event.sender === mainWindow.webContents;
+    const url = event.senderFrame?.url ?? "";
+    if (!fromMainWindow || !url.startsWith("file://") || event.senderFrame !== event.sender.mainFrame) {
+      throw new Error("Blocked: request did not come from the MultiPost window");
+    }
+    return listener(event, ...args);
+  });
+}
+
 function registerIpc() {
-  ipcMain.handle("app:init", () => ({
+  handle("app:init", () => ({
     state: getState(),
     platforms: listPlatforms(),
     sites: listSites(),
@@ -165,7 +190,7 @@ function registerIpc() {
   }));
 
   // Groups
-  ipcMain.handle("group:create", (_e, name: string) => {
+  handle("group:create", (_e, name: string) => {
     const group: Group = {
       id: crypto.randomUUID(),
       name: name.trim().slice(0, 60) || "Group",
@@ -176,7 +201,7 @@ function registerIpc() {
     update((s) => s.groups.push(group));
     return group;
   });
-  ipcMain.handle("group:update", (_e, id: string, patch: Partial<Pick<Group, "name" | "color" | "accountIds">>) => {
+  handle("group:update", (_e, id: string, patch: Partial<Pick<Group, "name" | "color" | "accountIds">>) => {
     update((s) => {
       const g = s.groups.find((x) => x.id === id);
       if (!g) return;
@@ -188,12 +213,12 @@ function registerIpc() {
       }
     });
   });
-  ipcMain.handle("group:delete", (_e, id: string) => {
+  handle("group:delete", (_e, id: string) => {
     update((s) => {
       s.groups = s.groups.filter((g) => g.id !== id);
     });
   });
-  ipcMain.handle("group:reorder", (_e, ids: string[]) => {
+  handle("group:reorder", (_e, ids: string[]) => {
     update((s) => {
       const order = new Map(ids.map((id, i) => [id, i]));
       s.groups.sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
@@ -201,36 +226,33 @@ function registerIpc() {
   });
 
   // Accounts
-  ipcMain.handle(
-    "account:create",
-    (_e, input: { accountKey: string; label: string; proxy?: string; groupIds?: string[] }) => {
-      if (!listSites().some((s) => s.accountKey === input.accountKey)) throw new Error("Unknown site");
-      validateProxy(input.proxy);
-      const id = crypto.randomUUID();
-      const account: Account = {
-        id,
-        accountKey: input.accountKey,
-        label: input.label?.trim().slice(0, 80) || "Account",
-        partition: partitionFor(id),
-        proxy: input.proxy?.trim() || undefined,
-        status: "unknown",
-        createdAt: Date.now(),
-      };
-      update((s) => {
-        s.accounts.push(account);
-        for (const g of s.groups) if (input.groupIds?.includes(g.id)) g.accountIds.push(id);
-      });
-      return account;
-    },
-  );
-  ipcMain.handle("account:update", (_e, id: string, patch: Partial<Account>) => {
+  handle("account:create", (_e, input: { accountKey: string; label: string; proxy?: string; groupIds?: string[] }) => {
+    if (!listSites().some((s) => s.accountKey === input.accountKey)) throw new Error("Unknown site");
+    validateProxy(input.proxy);
+    const id = crypto.randomUUID();
+    const account: Account = {
+      id,
+      accountKey: input.accountKey,
+      label: input.label?.trim().slice(0, 80) || "Account",
+      partition: partitionFor(id),
+      proxy: input.proxy?.trim() || undefined,
+      status: "unknown",
+      createdAt: Date.now(),
+    };
+    update((s) => {
+      s.accounts.push(account);
+      for (const g of s.groups) if (input.groupIds?.includes(g.id)) g.accountIds.push(id);
+    });
+    return account;
+  });
+  handle("account:update", (_e, id: string, patch: Partial<Account>) => {
     if ("proxy" in patch) validateProxy(patch.proxy);
     update((s) => {
       const a = s.accounts.find((x) => x.id === id);
       if (a) Object.assign(a, sanitizeAccountPatch(patch));
     });
   });
-  ipcMain.handle("account:setGroups", (_e, id: string, groupIds: string[]) => {
+  handle("account:setGroups", (_e, id: string, groupIds: string[]) => {
     update((s) => {
       for (const g of s.groups) {
         const has = g.accountIds.includes(id);
@@ -240,7 +262,7 @@ function registerIpc() {
       }
     });
   });
-  ipcMain.handle("account:delete", async (_e, id: string) => {
+  handle("account:delete", async (_e, id: string) => {
     const account = getState().accounts.find((a) => a.id === id);
     if (!account) return;
     closeLoginWindow(id);
@@ -254,16 +276,16 @@ function registerIpc() {
       s.pendingPartitionDeletes = [...new Set([...(s.pendingPartitionDeletes ?? []), account.partition])];
     });
   });
-  ipcMain.handle("account:login", (_e, id: string) => openLoginWindow(id));
-  ipcMain.handle("account:detect", (_e, id: string) => detectAccount(id));
-  ipcMain.handle("account:detectAll", async () => {
+  handle("account:login", (_e, id: string) => openLoginWindow(id));
+  handle("account:detect", (_e, id: string) => detectAccount(id));
+  handle("account:detectAll", async () => {
     const ids = getState().accounts.map((a) => a.id);
     // A few at a time: each check spins up a hidden page.
     for (let i = 0; i < ids.length; i += 3) {
       await Promise.all(ids.slice(i, i + 3).map((id) => detectAccount(id).catch(() => null)));
     }
   });
-  ipcMain.handle("account:signOut", async (_e, id: string) => {
+  handle("account:signOut", async (_e, id: string) => {
     const account = getState().accounts.find((a) => a.id === id);
     if (!account) return;
     closeLoginWindow(id);
@@ -278,7 +300,7 @@ function registerIpc() {
   });
 
   // Files
-  ipcMain.handle("files:pick", async (_e, kind: "image" | "video" | "audio" | "any", multiple: boolean) => {
+  handle("files:pick", async (_e, kind: "image" | "video" | "audio" | "any", multiple: boolean) => {
     const filters: Record<string, Electron.FileFilter[]> = {
       image: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] }],
       video: [{ name: "Videos", extensions: ["mp4", "mov", "m4v", "webm", "mkv", "avi", "flv"] }],
@@ -292,16 +314,16 @@ function registerIpc() {
     if (result.canceled) return [];
     return result.filePaths.map(toLocalFile).filter(Boolean);
   });
-  ipcMain.handle("files:fromPaths", (_e, paths: string[]) => paths.map(toLocalFile).filter(Boolean));
+  handle("files:fromPaths", (_e, paths: string[]) => paths.map(toLocalFile).filter(Boolean));
 
   // Publishing
-  ipcMain.handle("publish:start", (_e, request: PublishRequest) => startPublish(request));
-  ipcMain.handle("job:retry", (_e, id: string) => retryJob(id));
-  ipcMain.handle("job:cancel", (_e, id: string) => cancelJob(id));
-  ipcMain.handle("job:show", (_e, id: string) => showJobWindow(id));
-  ipcMain.handle("job:canRetry", (_e, ids: string[]) => ids.filter((id) => canRetry(id)));
-  ipcMain.handle("job:openWindows", () => openJobWindowIds());
-  ipcMain.handle("history:clear", () => {
+  handle("publish:start", (_e, request: PublishRequest) => startPublish(request));
+  handle("job:retry", (_e, id: string) => retryJob(id));
+  handle("job:cancel", (_e, id: string) => cancelJob(id));
+  handle("job:show", (_e, id: string) => showJobWindow(id));
+  handle("job:canRetry", (_e, ids: string[]) => ids.filter((id) => canRetry(id)));
+  handle("job:openWindows", () => openJobWindowIds());
+  handle("history:clear", () => {
     const before = new Set(getState().runs.map((r) => r.id));
     update((s) => {
       const running = new Set(
@@ -318,7 +340,7 @@ function registerIpc() {
   });
 
   // Settings & data
-  ipcMain.handle("settings:update", (_e, patch: Partial<Settings>) => {
+  handle("settings:update", (_e, patch: Partial<Settings>) => {
     update((s) => {
       const next = { ...s.settings, ...patch };
       next.concurrency = Math.min(10, Math.max(1, Math.round(Number(next.concurrency) || 1)));
@@ -328,20 +350,22 @@ function registerIpc() {
     });
     if (patch.theme) nativeTheme.themeSource = patch.theme;
   });
-  ipcMain.handle("data:export", async () => {
+  handle("data:export", async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
       defaultPath: `multipost-backup-${new Date().toISOString().slice(0, 10)}.json`,
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
     if (result.canceled || !result.filePath) return false;
     const { groups, accounts, settings } = getState();
+    // Backups may be shared or synced to the cloud: never include proxy passwords.
+    const safeAccounts = accounts.map((a) => ({ ...a, proxy: stripProxyCredentials(a.proxy) }));
     fs.writeFileSync(
       result.filePath,
-      JSON.stringify({ format: "multipost-desktop", version: 1, groups, accounts, settings }, null, 2),
+      JSON.stringify({ format: "multipost-desktop", version: 1, groups, accounts: safeAccounts, settings }, null, 2),
     );
     return true;
   });
-  ipcMain.handle("data:import", async () => {
+  handle("data:import", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       filters: [{ name: "JSON", extensions: ["json"] }],
       properties: ["openFile"],
@@ -398,13 +422,13 @@ function registerIpc() {
     replaceState({ ...current, accounts, groups });
     return true;
   });
-  ipcMain.handle("data:openFolder", () => shell.openPath(app.getPath("userData")));
-  ipcMain.handle("app:relaunch", () => {
+  handle("data:openFolder", () => shell.openPath(app.getPath("userData")));
+  handle("app:relaunch", () => {
     flush();
     app.relaunch();
     app.exit(0);
   });
-  ipcMain.handle("app:openExternal", (_e, url: string) => {
+  handle("app:openExternal", (_e, url: string) => {
     if (/^https?:\/\//.test(url)) return shell.openExternal(url);
   });
 }

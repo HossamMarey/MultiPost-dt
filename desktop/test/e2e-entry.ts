@@ -1,8 +1,10 @@
 // Test build of the main process: the real app plus a fake platform served from localhost.
 import "../src/main/index";
+import { createAccountWindow } from "../src/main/browser-windows";
 import { infoMap } from "../src/main/platforms";
 import { cancelJob, retryJob, startPublish } from "../src/main/publisher";
-import { getState, update } from "../src/main/store";
+import { markScriptless } from "../src/main/sessions";
+import { flush, getState, update } from "../src/main/store";
 
 // Self-contained like every real inject function.
 async function e2eInject(data: {
@@ -43,4 +45,13 @@ for (const [name, injectUrl, fn] of [
   infoMap[name] = { ...infoMap.DYNAMIC_E2E, name, injectUrl, injectFunction: fn as never, platformName: name };
 }
 
-(globalThis as Record<string, unknown>).__mp = { startPublish, getState, update, retryJob, cancelJob };
+(globalThis as Record<string, unknown>).__mp = {
+  startPublish,
+  getState,
+  update,
+  retryJob,
+  cancelJob,
+  flush,
+  createAccountWindow,
+  markScriptless,
+};
